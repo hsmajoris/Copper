@@ -41,8 +41,10 @@ MONTHLY_INDICATOR_ORDER = ["china_pmi", "us_pmi"]
 REALTIME_ONLY_INDICATORS = ["comex_copper_stock"]
 
 # All indicators that participate in the weighted copper_friendly score,
-# in display order (main SMA table indicators first, then monthly PMI).
-SCORE_INDICATOR_ORDER = ["dxy", "gold_copper_ratio", "wti", "china_pmi", "us_pmi"]
+# in display order (main SMA table indicators first, then the copper-trend
+# safety net, then monthly PMI). See "v2 시그널 로직" section below for
+# copper_trend itself.
+SCORE_INDICATOR_ORDER = ["copper_trend", "dxy", "gold_copper_ratio", "wti", "china_pmi", "us_pmi"]
 
 # ---------------------------------------------------------------------------
 # copper_friendly weighted score (see signals.py for the scoring function).
@@ -56,67 +58,149 @@ SCORE_INDICATOR_ORDER = ["dxy", "gold_copper_ratio", "wti", "china_pmi", "us_pmi
 # numerator and MAX_RAW_SCORE for that computation, so the remaining
 # indicators are reweighted rather than silently penalized.
 #
-# Weight rationale (initial draft — NOT yet re-verified by backtest, per the
-# task brief's explicit caveat that whoever set these lacks a feel for
-# copper's price behavior):
-#   - DXY (1.0): most consistently reported inverse correlation in the
-#     metals-macro literature (see FOOTNOTES).
-#   - gold/copper ratio (0.8): a widely used phase/regime indicator
-#     ("Dr. Copper" vs. gold as a growth-vs-safety barometer).
-#   - china_pmi / us_pmi (0.7 each): PMI is demand-side and China is the
-#     largest copper consumer, but the literature also documents this
-#     correlation collapsing to ~0 during the 2022 shock before re-
-#     strengthening — hence a middling, not top, weight.
-#   - WTI (0.4): explicitly the weakest/lowest-confidence link (shared
-#     commodity-inflation-expectations channel, not a direct copper driver).
+# Weight rationale — v2 (see "v2 시그널 로직 (2026-09 수정)" section below for
+# the full diagnosis this responds to; v1's original rationale is preserved
+# in git history):
+#   - copper_trend (1.2, new): copper's own price vs. its 200-day SMA. The
+#     highest weight in the table on purpose — it's the safety net for the
+#     exact failure mode v1 hit (every macro indicator staying "unfriendly"
+#     through a structural copper bull run), so it must be able to outvote
+#     the rest when it disagrees with them.
+#   - DXY (0.9, down from 1.0): still the most literature-consistent link,
+#     lightly trimmed to make room for copper_trend and reflect the
+#     2024-2026 relationship weakening noted in FOOTNOTES.
+#   - gold/copper ratio (0.8): unchanged weight — only its *judgment method*
+#     changed (rolling percentile instead of an absolute threshold; see
+#     below), the strength of the underlying phase-indicator idea did not.
+#   - china_pmi / us_pmi (0.7 each): unchanged from v1.
+#   - WTI (0.4 -> 0.3): trimmed further — the v1 diagnosis found WTI's
+#     day-to-day shading contributing disproportionately to whipsaw for its
+#     already-lowest-confidence link.
 WEIGHTS = {
-    "dxy": 1.0,
+    "copper_trend": 1.2,
+    "dxy": 0.9,
     "gold_copper_ratio": 0.8,
     "china_pmi": 0.7,
     "us_pmi": 0.7,
-    "wti": 0.4,
+    "wti": 0.3,
 }
-MAX_RAW_SCORE = sum(WEIGHTS.values())  # 3.6 — every indicator at +1
+MAX_RAW_SCORE = sum(WEIGHTS.values())  # 4.6 — every indicator at +1
 
-# 0-100 score at/above this is treated as "copper-friendly" in the UI badge.
-# Kept as a principled, symmetric-around-neutral (50) default rather than
-# reverse-fit to any single backtest run — a preliminary 10-year check of
-# just the 3 daily indicators (DXY/WTI/ratio; PMI has no historical series
-# yet — see backtest.py) actually showed forward 60-day copper returns
-# WEAKER when the score was high than when it was low, i.e. mean-reversion,
-# not momentum, in that sample. Optimizing this cutoff against that one
-# noisy, PMI-less run would be exactly the overfitting the task brief warns
-# about. pages/1_백테스트.py's score-distribution histogram is the intended
-# tool for revisiting this once PMI history has accumulated — see
-# README.md "가중치·임계값 산출 근거" for the full finding.
-SCORE_BUY_FRIENDLY_CUTOFF = 60.0
-SCORE_SELL_UNFRIENDLY_CUTOFF = 40.0
+# 0-100 score at/above this is treated as "copper-friendly" in the UI badge,
+# and (see backtest.py StrategyParams) is also the v2 backtest's buy cutoff.
+# v2 widens the v1 band (60/40 -> 65/35) as part of the whipsaw-suppression
+# fix — see "v2 시그널 로직" below and README.md "v2 백테스트 검증 결과" for
+# why: v1's tighter band let the score cross back and forth across a single
+# cutoff on essentially noise, generating short-lived whipsaw trades. The
+# widened, asymmetric band plus the persistence/min-holding rules below are
+# meant to be evaluated together, not independently re-tuned by eye — see
+# the "과최적화 금지" note in the v2 section.
+SCORE_BUY_FRIENDLY_CUTOFF = 65.0
+SCORE_SELL_UNFRIENDLY_CUTOFF = 35.0
+
+# v1's original cutoffs, kept ONLY so the backtest validation script
+# (scripts/validate_v2.py) can reproduce the exact v1 baseline for the
+# required "v1 vs v2" comparison. Not read anywhere else.
+LEGACY_V1_BUY_CUTOFF = 60.0
+LEGACY_V1_SELL_CUTOFF = 40.0
 
 # A PMI value not refreshed within this many days is excluded from the score
 # (and flagged "데이터 오래됨" in the UI) rather than silently kept stale.
 PMI_STALENESS_DAYS = 45
 
 # ---------------------------------------------------------------------------
-# gold/copper ratio ("Dr. Copper") phase thresholds. Unlike Gold's
+# gold/copper ratio ("Dr. Copper") phase judgment. Unlike Gold's
 # gold/silver ratio (where a HIGH ratio is the bullish-gold signal), a HIGH
 # gold/copper ratio means gold is expensive relative to copper — a classic
 # recession/risk-off signature (weak industrial demand) — so a LOW ratio is
 # the copper-friendly side here.
 #
-# GC=F is quoted per troy ounce and HG=F per pound, so the raw ratio sits in
-# the hundreds (not a small multiple like gold/silver's ~50-100) — these two
-# thresholds are the 25th/75th percentiles of the actual 2016-2026 GC=F/HG=F
-# daily ratio (calibrated from real 10-year history; see README.md
-# "가중치·임계값 산출 근거"), analogous to how Gold's 100/60 pair was chosen
-# relative to the academic 80 reference value.
-DEFAULT_GC_RATIO_BUY_THRESHOLD = 440.0   # ratio <= this => copper-friendly (favorable phase)
-DEFAULT_GC_RATIO_SELL_THRESHOLD = 620.0  # ratio >= this => copper-unfriendly (risk-off phase)
+# v1 used a pair of FIXED absolute thresholds (440/620, the 25th/75th
+# percentile of 2016-2026 history). That broke down once gold entered a
+# structural bull run in 2024-2026: the ratio's numerator re-based
+# permanently higher, so the ratio sat above 620 ("copper-unfriendly")
+# almost continuously through 2023-2026 even while copper itself rallied
+# hard — an absolute threshold on a non-stationary series just tracks
+# whichever regime it was calibrated in. v2 replaces this with a ROLLING
+# PERCENTILE RANK (see GC_RATIO_USE_ROLLING_PERCENTILE below): "is today's
+# ratio low/high relative to its own last N days", which re-centers
+# automatically as gold (or copper) re-bases. See "v2 시그널 로직" below.
+GC_RATIO_USE_ROLLING_PERCENTILE = True  # False reproduces the v1 absolute-threshold behavior
+DEFAULT_GC_RATIO_BUY_THRESHOLD = 440.0   # legacy (v1) absolute threshold — ratio <= this => friendly
+DEFAULT_GC_RATIO_SELL_THRESHOLD = 620.0  # legacy (v1) absolute threshold — ratio >= this => unfriendly
+
+# v2 rolling-percentile parameters, all tunable here per the task's "모든
+# 신규 상수는 config.py에 모아서" requirement. 504 trading days ~= 2 calendar
+# years; 30/70 is the same "opposite quartiles" shape as v1's original
+# 25th/75th percentile calibration, just recomputed on a trailing window
+# instead of the whole fixed 2016-2026 sample.
+GC_RATIO_ROLLING_WINDOW = 504
+GC_RATIO_PERCENTILE_BUY = 30.0   # rolling percentile rank <= this => copper-friendly
+GC_RATIO_PERCENTILE_SELL = 70.0  # rolling percentile rank >= this => copper-unfriendly
+
+# ---------------------------------------------------------------------------
+# copper's own price vs. its 200-day SMA — new in v2, see "v2 시그널 로직"
+# below. This is deliberately NOT folded into INDICATOR_ORDER/MA_WINDOWS
+# above: it's a single-window trend filter on copper itself (not a 60/30/5
+# breakout table entry), so it gets its own card (build_table.build_copper_trend_card)
+# the same way PMI/COMEX get their own cards instead of being forced into
+# the daily SMA table's shape.
+COPPER_TREND_ENABLED = True
+COPPER_TREND_SMA_WINDOW = 200
+
+# While copper's close is above its own 200-day SMA, a sell signal never
+# fully liquidates — it only trims to this fraction of the position. Turn
+# off to always fully exit on a sell signal regardless of the 200-day trend
+# (the pre-v2 behavior).
+COPPER_TREND_PARTIAL_EXIT_ENABLED = True
+COPPER_TREND_PARTIAL_EXIT_FRACTION = 0.5
+
+# ---------------------------------------------------------------------------
+# whipsaw suppression: v1's single 60/40 cutoff crossed back and forth on
+# essentially day-to-day noise (see README.md "v2 백테스트 검증 결과" for the
+# diagnosis). v2 adds an asymmetric buy(65)/sell(35) band (see
+# SCORE_BUY_FRIENDLY_CUTOFF/SCORE_SELL_UNFRIENDLY_CUTOFF above — the 35-65
+# gap is "hold whatever position you already have"), a persistence
+# requirement before a crossing is acted on, and a minimum holding period.
+WHIPSAW_SUPPRESSION_ENABLED = True
+SIGNAL_CONFIRMATION_DAYS = 3  # a cutoff must be held for this many consecutive
+# trading days before a trade actually fires (ignores 1-2 day spikes)
+MIN_HOLDING_DAYS = 10  # trading days after entry during which a sell is not even evaluated
+# (the stop loss below is the explicit, documented exception to this)
+
+# ---------------------------------------------------------------------------
+# DXY judgment method — v2 candidate change, see "v2 시그널 로직" below.
+# "sma": v1's method — copper-friendly when DXY sits below ALL of its
+#   5/30/60-day SMAs (same all-windows-agree rule as WTI).
+# "roc": v2 candidate — DXY's own N-day rate of change; negative (dollar
+#   weakening) => copper-friendly, positive => unfriendly. The task brief
+#   asks for both to be backtested and the better one kept — see
+#   scripts/validate_v2.py and README.md for that comparison; this constant
+#   selects which one the live dashboard/backtest actually uses.
+DXY_SIGNAL_METHOD = "roc"  # "roc" or "sma"
+DXY_ROC_WINDOW = 60
+
+# ---------------------------------------------------------------------------
+# stop loss — v1 had none, and its -45.9% MDD was judged unacceptable.
+# Unconditional exit once price falls this fraction below entry, bypassing
+# both the min-holding period and the signal-confirmation requirement above
+# (a stop loss is not a "signal", it's a hard risk limit). Re-entry after a
+# stop-out still requires the normal buy conditions (cutoff + persistence)
+# to be met again from scratch.
+STOP_LOSS_ENABLED = True
+STOP_LOSS_PCT = -0.15
 
 INDICATOR_META = {
     "dxy": {
         "label": "달러인덱스",
         "source": "Yahoo Finance (DX-Y.NYB)",
         "unit": "",
+        "decimals": 2,
+    },
+    "copper_trend": {
+        "label": "구리 자체 추세 (200일선)",
+        "source": "yfinance HG=F",
+        "unit": "$",
         "decimals": 2,
     },
     "gold_copper_ratio": {
@@ -190,6 +274,7 @@ CORRELATION_DIRECTION = {
     "dxy": "inverse",
     "gold_copper_ratio": "inverse",
     "wti": "positive",
+    "copper_trend": "positive",  # close above its own 200-day SMA is copper-friendly
     "comex_copper_stock": "inverse",  # higher stock = more available supply = bearish
 }
 
@@ -214,12 +299,26 @@ FOOTNOTES = {
     "dxy": (
         "업계 자료 기준 상관계수 약 -0.65~-0.82 수준으로 보고되나 학술 피어리뷰로 확정된 수치는 "
         "아님. CME Group 자료에 따르면 2000~2019년엔 비교적 안정적이었던 이 관계가 팬데믹 이후 "
-        "공급망 충격으로 깨진 사례가 있어, 특정 국면에서는 무력화될 수 있음."
+        "공급망 충격으로 깨진 사례가 있어, 특정 국면에서는 무력화될 수 있음. v1은 자체 이동평균 "
+        "대비 위치로 판정했으나 이 방식이 whipsaw(하루 단위 신호 반전)의 주요 원인 중 하나로 "
+        "지목되어, v2는 60일 변화율(rate of change) 기준으로 전환함(config.DXY_SIGNAL_METHOD로 "
+        "전환/복귀 가능 — scripts/validate_v2.py의 두 방식 비교 결과 참고)."
     ),
     "gold_copper_ratio": (
         "'Dr. Copper' — 구리가 경기 선행지표로서의 별명을 가질 만큼 오랜 기간 시장에서 통용되어 온 "
         "경험적 관행 지표이며, 금과의 비율을 국면판단 보조지표로 활용하는 것 역시 시장 관행이지 "
-        "통계적으로 검증된 인과관계는 아님."
+        "통계적으로 검증된 인과관계는 아님. v1은 이 비율에 고정 절대 임계값(440/620)을 썼으나, "
+        "2024~2026년 금의 구조적 대세 상승으로 비율이 영구적으로 레벨업하며 무력화되어(백테스트에서 "
+        "매수신호가 사실상 소멸) v2에서 롤링 백분위 방식으로 교체함 — 절대 임계값은 이런 비정상"
+        "(non-stationary) 시계열에 적합하지 않음."
+    ),
+    "copper_trend": (
+        "v2에서 신규 추가된 안전장치 지표. 위 각주들이 공통으로 지적하는 한계 — 거시 상관관계가 "
+        "특정 국면(지정학적 충격, 공급망 붕괴, 관세 이슈 등)에서 무력화될 수 있다는 점 — 을 "
+        "보완하기 위해, 거시 환경이 아닌 구리 가격 자체의 200일 이동평균 추세를 별도 지표로 "
+        "포함함. 다른 지표 전부가 '비우호적'을 가리켜도 구리가 실제로 강한 추세를 타고 있다면 "
+        "그 사실 자체가 신호에 반영되도록 하는 목적이며, 통계적으로 검증된 선행지표는 아니고 "
+        "가격 추세 추종(trend-following)이라는 별도의 가정에 기반함."
     ),
     "wti": (
         "원자재발 인플레이션 기대 및 생산비용 채널을 통한 정(+)의 관계가 보고되나, 문헌상 '약함, "

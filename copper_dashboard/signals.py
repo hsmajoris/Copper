@@ -101,6 +101,75 @@ def ratio_direction_score(
     return 0
 
 
+def copper_trend_direction_score(close: float, sma: float | None) -> int:
+    """+1 / -1 / 0 for copper's own price vs. its 200-day SMA (v2's new
+    safety-net indicator — see config.py "copper's own price vs. its
+    200-day SMA"): +1 if close is above the SMA, -1 if below, 0 if either
+    value is missing (not enough history yet for a full 200-day window).
+    """
+    if close is None or pd.isna(close) or sma is None or pd.isna(sma):
+        return 0
+    return 1 if close > sma else -1
+
+
+def rolling_percentile_rank(series: pd.Series, window: int) -> pd.Series:
+    """For each day, the percentile rank (0-100) of that day's value within
+    its own trailing `window`-day history (inclusive of itself). NaN until
+    `window` days of history have accumulated.
+
+    This is what lets the gold/copper ratio's "is this high or low" judgment
+    re-center automatically as the ratio's overall level drifts over time
+    (e.g. gold's 2024-2026 structural re-rating), instead of comparing
+    against a fixed absolute threshold calibrated to one historical regime
+    (see config.GC_RATIO_USE_ROLLING_PERCENTILE).
+    """
+    return series.rolling(window=window, min_periods=window).apply(
+        lambda arr: (arr <= arr[-1]).mean() * 100.0, raw=True
+    )
+
+
+def ratio_percentile_direction_score(
+    percentile: float,
+    buy_percentile: float = config.GC_RATIO_PERCENTILE_BUY,
+    sell_percentile: float = config.GC_RATIO_PERCENTILE_SELL,
+) -> int:
+    """+1 / 0 / -1 direction for the gold/copper ratio's rolling-percentile
+    signal (v2): +1 (favorable phase) when the ratio sits at/below
+    `buy_percentile` of its own trailing window (relatively cheap gold vs.
+    copper), -1 when at/above `sell_percentile`, 0 in between or if the
+    rolling window hasn't filled yet (percentile is NaN).
+    """
+    if percentile is None or pd.isna(percentile):
+        return 0
+    if percentile <= buy_percentile:
+        return 1
+    if percentile >= sell_percentile:
+        return -1
+    return 0
+
+
+def dxy_rate_of_change(series: pd.Series, window: int = config.DXY_ROC_WINDOW) -> pd.Series:
+    """DXY's own N-day rate of change (%, e.g. 2.5 = +2.5%), the v2
+    candidate replacement for the SMA-position judgment (see
+    config.DXY_SIGNAL_METHOD). NaN for the first `window` days.
+    """
+    return series.pct_change(periods=window) * 100.0
+
+
+def roc_direction_score(roc_value: float) -> int:
+    """+1 / -1 / 0 for DXY's rate-of-change signal: negative (dollar
+    weakening over the window) => +1 (copper-friendly), positive => -1,
+    0 on an exact tie or missing value.
+    """
+    if roc_value is None or pd.isna(roc_value):
+        return 0
+    if roc_value < 0:
+        return 1
+    if roc_value > 0:
+        return -1
+    return 0
+
+
 def pmi_direction_score(value: float, threshold: float = config.PMI_FAVORABLE_THRESHOLD) -> int:
     """+1 / 0 / -1 for a PMI reading: +1 above the 50-expansion line, -1
     below it, 0 only on an exact tie (per the dashboard's chosen convention

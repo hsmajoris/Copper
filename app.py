@@ -137,11 +137,12 @@ def render_indicator_chart(indicator_key: str, label: str, as_of_iso: str) -> No
         signal_flag = signals.all_windows_copper_friendly_for(
             indicator_key, chart_data["indicator"], chart_data["smas"]
         )
-    else:
-        buy_flag = signals.ratio_threshold_active(
+    elif "percentile" in chart_data:  # v2: rolling-percentile ratio
+        signal_flag = (chart_data["percentile"] <= config.GC_RATIO_PERCENTILE_BUY).fillna(False)
+    else:  # legacy (v1): absolute threshold
+        signal_flag = signals.ratio_threshold_active(
             chart_data["indicator"], config.DEFAULT_GC_RATIO_BUY_THRESHOLD, "le"
         )
-        signal_flag = buy_flag
 
     shade_ranges = _boolean_series_to_ranges(signal_flag)
     layers = []
@@ -159,7 +160,11 @@ def render_indicator_chart(indicator_key: str, label: str, as_of_iso: str) -> No
         )
 
     layers.append(left_chart)
-    if chart_data["kind"] == "ratio":
+    if chart_data["kind"] == "ratio" and "percentile" not in chart_data:
+        # Legacy (v1) absolute-threshold mode only — a fixed horizontal line
+        # doesn't mean anything for the v2 rolling-percentile mode, since
+        # "high/low" there is relative to a moving 2-year window, not a
+        # fixed ratio level.
         threshold_df = pd.DataFrame(
             {
                 "y": [config.DEFAULT_GC_RATIO_BUY_THRESHOLD, config.DEFAULT_GC_RATIO_SELL_THRESHOLD],
@@ -203,7 +208,15 @@ def render_indicator_chart(indicator_key: str, label: str, as_of_iso: str) -> No
     )
     st.altair_chart(combined_chart, use_container_width=True)
 
-    if chart_data["kind"] == "ratio":
+    if chart_data["kind"] == "ratio" and "percentile" in chart_data:
+        st.caption(f"🔵 {label}(왼쪽 축) · 🟤 구리 가격(오른쪽 축, $)")
+        st.caption(
+            f"🟥 음영 구간 = 비율이 자신의 최근 {config.GC_RATIO_ROLLING_WINDOW}거래일(~2년) 대비 하위 "
+            f"{config.GC_RATIO_PERCENTILE_BUY:g}% 이내로 낮은 날 (구리에 우호적인 국면 — v2 롤링 백분위 "
+            "방식. 고정 임계값이 아니라 최근 히스토리 대비 상대적 위치이므로, 값 자체가 시간에 따라 "
+            "레벨업/레벨다운해도 자동으로 재보정됩니다.)"
+        )
+    elif chart_data["kind"] == "ratio":
         st.caption(
             f"🔵 {label}(왼쪽 축) · 🟤 구리 가격(오른쪽 축, $) · 회색 점선 = 매수 우호적/비우호적 임계값 "
             f"({config.DEFAULT_GC_RATIO_BUY_THRESHOLD:g} / {config.DEFAULT_GC_RATIO_SELL_THRESHOLD:g})"
@@ -372,6 +385,26 @@ def render_pmi_card(indicator_key: str, monthly_data: dict) -> None:
         _pmi_refresh_and_save(indicator_key, label)
 
 
+def render_copper_trend_card(copper_trend: dict | None) -> None:
+    if copper_trend is None:
+        st.info(
+            "🛡️ 구리 자체 추세(200일선) 카드는 다음 일일 배치 갱신(매일 07:00 KST) 이후 표시됩니다 "
+            "— v2에서 새로 추가된 지표라 기존 data/latest.json에는 아직 없습니다."
+        )
+        return
+    with st.container(border=True):
+        st.markdown(f"#### 🛡️ {copper_trend['label']} (v2 신규 — 안전장치 지표, 가중치 {copper_trend['weight']:g})")
+        badge = "🟢 우호적" if copper_trend["above_sma"] else "🔴 비우호적"
+        st.metric(
+            f"구리(HG=F) 종가 (기준일 {copper_trend['as_of']})",
+            copper_trend["close_display"],
+            delta=f"{badge} · {copper_trend['status_text']}",
+            delta_color="off",
+        )
+        st.caption(f"{config.COPPER_TREND_SMA_WINDOW}일 이동평균: {copper_trend['sma_display']}")
+        st.caption(config.FOOTNOTES["copper_trend"])
+
+
 def render_comex_card(comex: dict) -> None:
     with st.container(border=True):
         st.markdown(f"#### {comex['label']} (실시간 카드 — 점수/백테스트 미반영)")
@@ -439,7 +472,16 @@ def render_dashboard() -> None:
         key: build_table.build_monthly_indicator(key) for key in config.MONTHLY_INDICATOR_ORDER
     }
     comex = build_table.build_comex_card()
+    # copper_trend (v2's own-price safety-net indicator) IS part of the
+    # cached daily-batch payload (`data`, refreshed once a day) since it's a
+    # daily-frequency series like DXY/WTI, not a button-refreshed one like
+    # PMI/COMEX — see build_table.build(). `.get(...)` guards against a
+    # data/latest.json written by the pre-v2 batch job (before this key
+    # existed) that hasn't been regenerated yet — the score just excludes it
+    # until the next daily batch run picks up the new schema.
+    copper_trend = data.get("copper_trend")
     score_directions = {key: data["indicators"][key]["score_direction"] for key in config.INDICATOR_ORDER}
+    score_directions["copper_trend"] = copper_trend.get("score_direction") if copper_trend else None
     score_directions.update(
         {key: monthly_indicators[key].get("score_direction") for key in config.MONTHLY_INDICATOR_ORDER}
     )
@@ -462,6 +504,7 @@ def render_dashboard() -> None:
     )
 
     render_score(score)
+    render_copper_trend_card(copper_trend)
 
     st.markdown("#### 일별 지표 (자동 갱신)")
     st.caption(
