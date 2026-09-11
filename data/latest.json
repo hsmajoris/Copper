@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-09-10T15:48:24.028748+09:00",
+  "generated_at": "2026-09-12T07:12:27.328695+09:00",
   "requested_as_of": null,
-  "as_of": "2026-09-10",
+  "as_of": "2026-09-11",
   "indicator_order": [
     "dxy",
     "gold_copper_ratio",
@@ -11,132 +11,145 @@
     "dxy": {
       "label": "달러인덱스",
       "source": "Yahoo Finance (DX-Y.NYB)",
-      "as_of": "2026-09-10",
+      "as_of": "2026-09-11",
       "prev_close": {
-        "value": 98.738,
-        "display": "98.74"
+        "value": 99.095,
+        "display": "99.10"
       },
       "sma": {
         "60": {
-          "ma_value": 100.234,
+          "ma_value": 100.2324,
           "ma_display": "100.23",
           "status_text": "이평선 아래",
-          "display": "100.23 (종가 98.74 → 이평선 아래)",
+          "display": "100.23 (종가 99.10 → 이평선 아래)",
           "streak": 0,
           "breakout": false,
           "streak_display": "",
           "copper_friendly": true
         },
         "30": {
-          "ma_value": 99.4376,
-          "ma_display": "99.44",
+          "ma_value": 99.4188,
+          "ma_display": "99.42",
           "status_text": "이평선 아래",
-          "display": "99.44 (종가 98.74 → 이평선 아래)",
+          "display": "99.42 (종가 99.10 → 이평선 아래)",
           "streak": 0,
           "breakout": false,
           "streak_display": "",
           "copper_friendly": true
         },
         "5": {
-          "ma_value": 98.9016,
-          "ma_display": "98.90",
-          "status_text": "이평선 아래",
-          "display": "98.90 (종가 98.74 → 이평선 아래)",
-          "streak": 0,
-          "breakout": false,
-          "streak_display": "",
-          "copper_friendly": true
+          "ma_value": 98.991,
+          "ma_display": "98.99",
+          "status_text": "상향 돌파",
+          "display": "98.99 (종가 99.10 → 상향 돌파)",
+          "streak": 2,
+          "breakout": true,
+          "streak_display": "2일째",
+          "copper_friendly": false
         }
       },
-      "weight": 1.0,
+      "weight": 0.9,
       "score_direction": 1
     },
     "gold_copper_ratio": {
       "label": "금/구리 비율 (Dr. Copper)",
       "source": "yfinance GC=F / HG=F",
-      "as_of": "2026-09-10",
+      "as_of": "2026-09-11",
       "prev_close": {
-        "value": 647.9971,
-        "display": "648.0"
+        "value": 669.5135,
+        "display": "669.5"
       },
       "sma": {
         "60": {
-          "ma_value": 660.2079,
-          "ma_display": "660.2",
-          "status_text": "이평선 아래",
-          "display": "660.2 (종가 648.0 → 이평선 아래)",
-          "streak": 0,
-          "breakout": false,
-          "streak_display": "",
-          "copper_friendly": true
+          "ma_value": 660.6909,
+          "ma_display": "660.7",
+          "status_text": "상향 돌파",
+          "display": "660.7 (종가 669.5 → 상향 돌파)",
+          "streak": 2,
+          "breakout": true,
+          "streak_display": "2일째",
+          "copper_friendly": false
         },
         "30": {
-          "ma_value": 665.8654,
-          "ma_display": "665.9",
-          "status_text": "이평선 아래",
-          "display": "665.9 (종가 648.0 → 이평선 아래)",
-          "streak": 0,
-          "breakout": false,
-          "streak_display": "",
-          "copper_friendly": true
+          "ma_value": 667.8717,
+          "ma_display": "667.9",
+          "status_text": "상향 돌파",
+          "display": "667.9 (종가 669.5 → 상향 돌파)",
+          "streak": 2,
+          "breakout": true,
+          "streak_display": "2일째",
+          "copper_friendly": false
         },
         "5": {
-          "ma_value": 660.7026,
-          "ma_display": "660.7",
-          "status_text": "이평선 아래",
-          "display": "660.7 (종가 648.0 → 이평선 아래)",
-          "streak": 0,
-          "breakout": false,
-          "streak_display": "",
-          "copper_friendly": true
+          "ma_value": 663.3953,
+          "ma_display": "663.4",
+          "status_text": "상향 돌파",
+          "display": "663.4 (종가 669.5 → 상향 돌파)",
+          "streak": 2,
+          "breakout": true,
+          "streak_display": "2일째",
+          "copper_friendly": false
         }
       },
       "weight": 0.8,
-      "score_direction": -1
+      "score_direction": 0
     },
     "wti": {
       "label": "WTI 유가",
       "source": "yfinance CL=F",
-      "as_of": "2026-09-10",
+      "as_of": "2026-09-11",
       "prev_close": {
-        "value": 95.48,
-        "display": "$95.48"
+        "value": 99.99,
+        "display": "$99.99"
       },
       "sma": {
         "60": {
-          "ma_value": 80.8688,
-          "ma_display": "$80.87",
+          "ma_value": 81.3845,
+          "ma_display": "$81.38",
           "status_text": "상향 돌파",
-          "display": "$80.87 (종가 $95.48 → 상향 돌파)",
-          "streak": 19,
+          "display": "$81.38 (종가 $99.99 → 상향 돌파)",
+          "streak": 20,
           "breakout": true,
-          "streak_display": "19일째",
+          "streak_display": "20일째",
           "copper_friendly": true
         },
         "30": {
-          "ma_value": 84.9443,
-          "ma_display": "$84.94",
+          "ma_value": 85.7243,
+          "ma_display": "$85.72",
           "status_text": "상향 돌파",
-          "display": "$84.94 (종가 $95.48 → 상향 돌파)",
+          "display": "$85.72 (종가 $99.99 → 상향 돌파)",
+          "streak": 11,
+          "breakout": true,
+          "streak_display": "11일째",
+          "copper_friendly": true
+        },
+        "5": {
+          "ma_value": 96.606,
+          "ma_display": "$96.61",
+          "status_text": "상향 돌파",
+          "display": "$96.61 (종가 $99.99 → 상향 돌파)",
           "streak": 10,
           "breakout": true,
           "streak_display": "10일째",
           "copper_friendly": true
-        },
-        "5": {
-          "ma_value": 93.468,
-          "ma_display": "$93.47",
-          "status_text": "상향 돌파",
-          "display": "$93.47 (종가 $95.48 → 상향 돌파)",
-          "streak": 9,
-          "breakout": true,
-          "streak_display": "9일째",
-          "copper_friendly": true
         }
       },
-      "weight": 0.4,
+      "weight": 0.3,
       "score_direction": 1
     }
+  },
+  "copper_trend": {
+    "label": "구리 자체 추세 (200일선)",
+    "source": "yfinance HG=F",
+    "as_of": "2026-09-11",
+    "close": 6.56,
+    "close_display": "$6.56",
+    "sma_value": 6.02,
+    "sma_display": "$6.02",
+    "above_sma": true,
+    "status_text": "200일선 위 (추세 우호적)",
+    "weight": 1.2,
+    "score_direction": 1
   },
   "monthly_indicator_order": [
     "china_pmi",
@@ -163,10 +176,11 @@
     "days_of_history": 0
   },
   "score": {
-    "score": 63.63636363636363,
-    "raw_score": 0.6,
-    "max_score": 2.2,
+    "score": 87.49999999999999,
+    "raw_score": 2.4,
+    "max_score": 3.2,
     "included": [
+      "copper_trend",
       "dxy",
       "gold_copper_ratio",
       "wti"
@@ -223,8 +237,9 @@
     5
   ],
   "footnotes": {
-    "dxy": "업계 자료 기준 상관계수 약 -0.65~-0.82 수준으로 보고되나 학술 피어리뷰로 확정된 수치는 아님. CME Group 자료에 따르면 2000~2019년엔 비교적 안정적이었던 이 관계가 팬데믹 이후 공급망 충격으로 깨진 사례가 있어, 특정 국면에서는 무력화될 수 있음.",
-    "gold_copper_ratio": "'Dr. Copper' — 구리가 경기 선행지표로서의 별명을 가질 만큼 오랜 기간 시장에서 통용되어 온 경험적 관행 지표이며, 금과의 비율을 국면판단 보조지표로 활용하는 것 역시 시장 관행이지 통계적으로 검증된 인과관계는 아님.",
+    "dxy": "업계 자료 기준 상관계수 약 -0.65~-0.82 수준으로 보고되나 학술 피어리뷰로 확정된 수치는 아님. CME Group 자료에 따르면 2000~2019년엔 비교적 안정적이었던 이 관계가 팬데믹 이후 공급망 충격으로 깨진 사례가 있어, 특정 국면에서는 무력화될 수 있음. v1은 자체 이동평균 대비 위치로 판정했으나 이 방식이 whipsaw(하루 단위 신호 반전)의 주요 원인 중 하나로 지목되어, v2는 60일 변화율(rate of change) 기준으로 전환함(config.DXY_SIGNAL_METHOD로 전환/복귀 가능 — scripts/validate_v2.py의 두 방식 비교 결과 참고).",
+    "gold_copper_ratio": "'Dr. Copper' — 구리가 경기 선행지표로서의 별명을 가질 만큼 오랜 기간 시장에서 통용되어 온 경험적 관행 지표이며, 금과의 비율을 국면판단 보조지표로 활용하는 것 역시 시장 관행이지 통계적으로 검증된 인과관계는 아님. v1은 이 비율에 고정 절대 임계값(440/620)을 썼으나, 2024~2026년 금의 구조적 대세 상승으로 비율이 영구적으로 레벨업하며 무력화되어(백테스트에서 매수신호가 사실상 소멸) v2에서 롤링 백분위 방식으로 교체함 — 절대 임계값은 이런 비정상(non-stationary) 시계열에 적합하지 않음.",
+    "copper_trend": "v2에서 신규 추가된 안전장치 지표. 위 각주들이 공통으로 지적하는 한계 — 거시 상관관계가 특정 국면(지정학적 충격, 공급망 붕괴, 관세 이슈 등)에서 무력화될 수 있다는 점 — 을 보완하기 위해, 거시 환경이 아닌 구리 가격 자체의 200일 이동평균 추세를 별도 지표로 포함함. 다른 지표 전부가 '비우호적'을 가리켜도 구리가 실제로 강한 추세를 타고 있다면 그 사실 자체가 신호에 반영되도록 하는 목적이며, 통계적으로 검증된 선행지표는 아니고 가격 추세 추종(trend-following)이라는 별도의 가정에 기반함.",
     "wti": "원자재발 인플레이션 기대 및 생산비용 채널을 통한 정(+)의 관계가 보고되나, 문헌상 '약함, 낮은 신뢰도'로 명시된 지표로 다른 지표 대비 근거가 상대적으로 약함.",
     "china_pmi": "HSBC 리서치에 따르면 2022년 러시아-우크라이나 전쟁을 계기로 구리-PMI 상관관계가 일시적으로 0까지 떨어졌다가 최근 재차 강화되는 등, 국면에 따라 상관관계 자체가 크게 변동함. 히스토리컬 데이터는 비공식 3자 재배포 소스 기반이며 공식 통계와 오차가 있을 수 있음(백테스트 페이지 각주 참고).",
     "us_pmi": "중국 PMI와 동일하게 국면에 따라 상관관계 강도가 크게 변동함(위 중국 PMI 각주 참고). 히스토리컬 데이터는 비공식 3자 재배포 소스 기반이며 공식 통계와 오차가 있을 수 있음.",
