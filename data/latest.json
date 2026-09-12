@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-12T07:12:27.328695+09:00",
+  "generated_at": "2026-09-13T07:11:28.638989+09:00",
   "requested_as_of": null,
   "as_of": "2026-09-11",
   "indicator_order": [
@@ -13,35 +13,35 @@
       "source": "Yahoo Finance (DX-Y.NYB)",
       "as_of": "2026-09-11",
       "prev_close": {
-        "value": 99.095,
-        "display": "99.10"
+        "value": 99.12,
+        "display": "99.12"
       },
       "sma": {
         "60": {
-          "ma_value": 100.2324,
+          "ma_value": 100.2328,
           "ma_display": "100.23",
           "status_text": "이평선 아래",
-          "display": "100.23 (종가 99.10 → 이평선 아래)",
+          "display": "100.23 (종가 99.12 → 이평선 아래)",
           "streak": 0,
           "breakout": false,
           "streak_display": "",
           "copper_friendly": true
         },
         "30": {
-          "ma_value": 99.4188,
+          "ma_value": 99.4197,
           "ma_display": "99.42",
           "status_text": "이평선 아래",
-          "display": "99.42 (종가 99.10 → 이평선 아래)",
+          "display": "99.42 (종가 99.12 → 이평선 아래)",
           "streak": 0,
           "breakout": false,
           "streak_display": "",
           "copper_friendly": true
         },
         "5": {
-          "ma_value": 98.991,
-          "ma_display": "98.99",
+          "ma_value": 98.996,
+          "ma_display": "99.00",
           "status_text": "상향 돌파",
-          "display": "98.99 (종가 99.10 → 상향 돌파)",
+          "display": "99.00 (종가 99.12 → 상향 돌파)",
           "streak": 2,
           "breakout": true,
           "streak_display": "2일째",
@@ -56,35 +56,35 @@
       "source": "yfinance GC=F / HG=F",
       "as_of": "2026-09-11",
       "prev_close": {
-        "value": 669.5135,
-        "display": "669.5"
+        "value": 674.8899,
+        "display": "674.9"
       },
       "sma": {
         "60": {
-          "ma_value": 660.6909,
-          "ma_display": "660.7",
+          "ma_value": 660.7805,
+          "ma_display": "660.8",
           "status_text": "상향 돌파",
-          "display": "660.7 (종가 669.5 → 상향 돌파)",
+          "display": "660.8 (종가 674.9 → 상향 돌파)",
           "streak": 2,
           "breakout": true,
           "streak_display": "2일째",
           "copper_friendly": false
         },
         "30": {
-          "ma_value": 667.8717,
-          "ma_display": "667.9",
+          "ma_value": 668.0509,
+          "ma_display": "668.1",
           "status_text": "상향 돌파",
-          "display": "667.9 (종가 669.5 → 상향 돌파)",
+          "display": "668.1 (종가 674.9 → 상향 돌파)",
           "streak": 2,
           "breakout": true,
           "streak_display": "2일째",
           "copper_friendly": false
         },
         "5": {
-          "ma_value": 663.3953,
-          "ma_display": "663.4",
+          "ma_value": 664.4706,
+          "ma_display": "664.5",
           "status_text": "상향 돌파",
-          "display": "663.4 (종가 669.5 → 상향 돌파)",
+          "display": "664.5 (종가 674.9 → 상향 돌파)",
           "streak": 2,
           "breakout": true,
           "streak_display": "2일째",
@@ -99,35 +99,35 @@
       "source": "yfinance CL=F",
       "as_of": "2026-09-11",
       "prev_close": {
-        "value": 99.99,
-        "display": "$99.99"
+        "value": 100.05,
+        "display": "$100.05"
       },
       "sma": {
         "60": {
-          "ma_value": 81.3845,
-          "ma_display": "$81.38",
+          "ma_value": 81.3855,
+          "ma_display": "$81.39",
           "status_text": "상향 돌파",
-          "display": "$81.38 (종가 $99.99 → 상향 돌파)",
+          "display": "$81.39 (종가 $100.05 → 상향 돌파)",
           "streak": 20,
           "breakout": true,
           "streak_display": "20일째",
           "copper_friendly": true
         },
         "30": {
-          "ma_value": 85.7243,
-          "ma_display": "$85.72",
+          "ma_value": 85.7263,
+          "ma_display": "$85.73",
           "status_text": "상향 돌파",
-          "display": "$85.72 (종가 $99.99 → 상향 돌파)",
+          "display": "$85.73 (종가 $100.05 → 상향 돌파)",
           "streak": 11,
           "breakout": true,
           "streak_display": "11일째",
           "copper_friendly": true
         },
         "5": {
-          "ma_value": 96.606,
-          "ma_display": "$96.61",
+          "ma_value": 96.618,
+          "ma_display": "$96.62",
           "status_text": "상향 돌파",
-          "display": "$96.61 (종가 $99.99 → 상향 돌파)",
+          "display": "$96.62 (종가 $100.05 → 상향 돌파)",
           "streak": 10,
           "breakout": true,
           "streak_display": "10일째",
@@ -142,8 +142,8 @@
     "label": "구리 자체 추세 (200일선)",
     "source": "yfinance HG=F",
     "as_of": "2026-09-11",
-    "close": 6.56,
-    "close_display": "$6.56",
+    "close": 6.47,
+    "close_display": "$6.47",
     "sma_value": 6.02,
     "sma_display": "$6.02",
     "above_sma": true,
