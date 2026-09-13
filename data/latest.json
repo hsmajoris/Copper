@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-09-13T07:11:28.638989+09:00",
+  "generated_at": "2026-09-14T07:12:02.264658+09:00",
   "requested_as_of": null,
-  "as_of": "2026-09-11",
+  "as_of": "2026-09-13",
   "indicator_order": [
     "dxy",
     "gold_copper_ratio",
@@ -11,40 +11,40 @@
     "dxy": {
       "label": "달러인덱스",
       "source": "Yahoo Finance (DX-Y.NYB)",
-      "as_of": "2026-09-11",
+      "as_of": "2026-09-13",
       "prev_close": {
-        "value": 99.12,
-        "display": "99.12"
+        "value": 99.087,
+        "display": "99.09"
       },
       "sma": {
         "60": {
-          "ma_value": 100.2328,
-          "ma_display": "100.23",
+          "ma_value": 100.2161,
+          "ma_display": "100.22",
           "status_text": "이평선 아래",
-          "display": "100.23 (종가 99.12 → 이평선 아래)",
+          "display": "100.22 (종가 99.09 → 이평선 아래)",
           "streak": 0,
           "breakout": false,
           "streak_display": "",
           "copper_friendly": true
         },
         "30": {
-          "ma_value": 99.4197,
-          "ma_display": "99.42",
+          "ma_value": 99.3959,
+          "ma_display": "99.40",
           "status_text": "이평선 아래",
-          "display": "99.42 (종가 99.12 → 이평선 아래)",
+          "display": "99.40 (종가 99.09 → 이평선 아래)",
           "streak": 0,
           "breakout": false,
           "streak_display": "",
           "copper_friendly": true
         },
         "5": {
-          "ma_value": 98.996,
-          "ma_display": "99.00",
+          "ma_value": 98.9814,
+          "ma_display": "98.98",
           "status_text": "상향 돌파",
-          "display": "99.00 (종가 99.12 → 상향 돌파)",
-          "streak": 2,
+          "display": "98.98 (종가 99.09 → 상향 돌파)",
+          "streak": 3,
           "breakout": true,
-          "streak_display": "2일째",
+          "streak_display": "3일째",
           "copper_friendly": false
         }
       },
@@ -54,40 +54,40 @@
     "gold_copper_ratio": {
       "label": "금/구리 비율 (Dr. Copper)",
       "source": "yfinance GC=F / HG=F",
-      "as_of": "2026-09-11",
+      "as_of": "2026-09-13",
       "prev_close": {
-        "value": 674.8899,
-        "display": "674.9"
+        "value": 673.3201,
+        "display": "673.3"
       },
       "sma": {
         "60": {
-          "ma_value": 660.7805,
+          "ma_value": 660.794,
           "ma_display": "660.8",
           "status_text": "상향 돌파",
-          "display": "660.8 (종가 674.9 → 상향 돌파)",
-          "streak": 2,
+          "display": "660.8 (종가 673.3 → 상향 돌파)",
+          "streak": 3,
           "breakout": true,
-          "streak_display": "2일째",
+          "streak_display": "3일째",
           "copper_friendly": false
         },
         "30": {
-          "ma_value": 668.0509,
-          "ma_display": "668.1",
+          "ma_value": 669.5238,
+          "ma_display": "669.5",
           "status_text": "상향 돌파",
-          "display": "668.1 (종가 674.9 → 상향 돌파)",
-          "streak": 2,
+          "display": "669.5 (종가 673.3 → 상향 돌파)",
+          "streak": 3,
           "breakout": true,
-          "streak_display": "2일째",
+          "streak_display": "3일째",
           "copper_friendly": false
         },
         "5": {
-          "ma_value": 664.4706,
-          "ma_display": "664.5",
+          "ma_value": 664.8372,
+          "ma_display": "664.8",
           "status_text": "상향 돌파",
-          "display": "664.5 (종가 674.9 → 상향 돌파)",
-          "streak": 2,
+          "display": "664.8 (종가 673.3 → 상향 돌파)",
+          "streak": 3,
           "breakout": true,
-          "streak_display": "2일째",
+          "streak_display": "3일째",
           "copper_friendly": false
         }
       },
@@ -97,40 +97,40 @@
     "wti": {
       "label": "WTI 유가",
       "source": "yfinance CL=F",
-      "as_of": "2026-09-11",
+      "as_of": "2026-09-13",
       "prev_close": {
         "value": 100.05,
         "display": "$100.05"
       },
       "sma": {
         "60": {
-          "ma_value": 81.3855,
-          "ma_display": "$81.39",
+          "ma_value": 81.7732,
+          "ma_display": "$81.77",
           "status_text": "상향 돌파",
-          "display": "$81.39 (종가 $100.05 → 상향 돌파)",
-          "streak": 20,
+          "display": "$81.77 (종가 $100.05 → 상향 돌파)",
+          "streak": 21,
           "breakout": true,
-          "streak_display": "20일째",
+          "streak_display": "21일째",
           "copper_friendly": true
         },
         "30": {
-          "ma_value": 85.7263,
-          "ma_display": "$85.73",
+          "ma_value": 86.239,
+          "ma_display": "$86.24",
           "status_text": "상향 돌파",
-          "display": "$85.73 (종가 $100.05 → 상향 돌파)",
-          "streak": 11,
+          "display": "$86.24 (종가 $100.05 → 상향 돌파)",
+          "streak": 12,
           "breakout": true,
-          "streak_display": "11일째",
+          "streak_display": "12일째",
           "copper_friendly": true
         },
         "5": {
-          "ma_value": 96.618,
-          "ma_display": "$96.62",
+          "ma_value": 98.332,
+          "ma_display": "$98.33",
           "status_text": "상향 돌파",
-          "display": "$96.62 (종가 $100.05 → 상향 돌파)",
-          "streak": 10,
+          "display": "$98.33 (종가 $100.05 → 상향 돌파)",
+          "streak": 11,
           "breakout": true,
-          "streak_display": "10일째",
+          "streak_display": "11일째",
           "copper_friendly": true
         }
       },
@@ -141,11 +141,11 @@
   "copper_trend": {
     "label": "구리 자체 추세 (200일선)",
     "source": "yfinance HG=F",
-    "as_of": "2026-09-11",
-    "close": 6.47,
-    "close_display": "$6.47",
-    "sma_value": 6.02,
-    "sma_display": "$6.02",
+    "as_of": "2026-09-13",
+    "close": 6.55,
+    "close_display": "$6.55",
+    "sma_value": 6.03,
+    "sma_display": "$6.03",
     "above_sma": true,
     "status_text": "200일선 위 (추세 우호적)",
     "weight": 1.2,
