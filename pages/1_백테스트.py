@@ -125,9 +125,12 @@ with st.expander("전략 규칙 보기"):
   2시그마 밴드는 위와 동일한 공식으로 상승 기준 8거래일차 +{b8:.2f}% ~ 21거래일차 +{b21:.2f}%).
 - 고급 설정의 **수수료**(② KODEX 구리선물(H) 선택 시에만 적용, ① 국제 구리 시세에는 적용되지
   않음)는 KODEX 구리선물(H)의 실제 비용 구조를 반영합니다: **매수/매도 수수료**(각 기본
-  {buy_fee:g}%, 편도, 온라인 HTS/MTS 매매수수료 추정치 — ESTIMATE, 매매가 일어날 때마다 1회성
-  차감)와 **총보수**(기본 연 {expense:g}%, 삼성자산운용 공시 기준 — CONFIRMED, 보유 잔량에 대해
-  일할 복리 환산해 매일 누적 적용). "수수료 반영" 체크박스로 전부 껐다 켤 수 있고, 차트에서는
+  {buy_fee:g}%, 편도, 2026년 기준 국내 증권사 상시요율 중 최저가(하나증권) — CONFIRMED, 매매가
+  일어날 때마다 1회성 차감)와 **총보수**(기본 연 {expense:g}%, 삼성자산운용 공식 펀드 팩트시트
+  기준 — CONFIRMED, 보유 잔량에 대해 일할 복리 환산해 매일 누적 적용). 이 모델은 15년에 30건
+  미만(연 2건 미만)의 저빈도 매매 구조라, 매매수수료가 결과에 미치는 영향은 크지 않고
+  (누적해도 총 1%p 미만) 매일 무조건 차감되는 총보수 쪽이 15년 누적 기준 복리로 훨씬 큰
+  영향(약 9~10%p)을 줍니다. "수수료 반영" 체크박스로 전부 껐다 켤 수 있고, 차트에서는
   이 값과 별개로 수수료 반영/미반영 곡선을 토글로 비교할 수 있습니다
 - 분석 기간: **{years}년** (1~15년 조정 가능, 이동평균 계산용으로 그 이전 {buffer}캘린더일치
   데이터를 추가로 사용). 기본은 오늘을 기준으로 최근 {years}년이지만, "기준일 (오늘로부터
@@ -301,15 +304,17 @@ with st.expander("⚙️ 고급 설정 (최소 보유일수 등 — 기본값 �
     fee_buy_col, fee_sell_col, fee_holding_col = st.columns(3)
     with fee_buy_col:
         buy_fee_pct = st.number_input(
-            "매수 수수료 (%, 편도, ESTIMATE)",
+            "매수 수수료 (%, 편도, CONFIRMED)",
             min_value=0.0, max_value=5.0, step=0.001, format="%.3f", key="bt_buy_fee_pct",
             disabled=copper_price_basis != config.COPPER_PRICE_BASIS_KRX or not apply_fees,
-            help="매수 체결 시마다 그날 매수금액에 부과되는 1회성 수수료입니다(기본값 0.015% — "
-            "특정 증권사 공시값이 아닌 온라인 HTS/MTS ETF 매매수수료의 대표적인 추정치입니다).",
+            help="매수 체결 시마다 그날 매수금액에 부과되는 1회성 수수료입니다(기본값 0.014% — "
+            "2026년 기준 국내 증권사 상시요율(이벤트 미적용) 중 최저인 하나증권 공시 요율,"
+            "1억원 이상 거래에서도 동일). 이 모델은 15년에 30건 미만(연 2건 미만)의 저빈도 매매라 "
+            "이 수수료가 누적 결과에 미치는 영향은 크지 않습니다(15년 누적 왕복 기준 1%p 미만).",
         )
     with fee_sell_col:
         sell_fee_pct = st.number_input(
-            "매도 수수료 (%, 편도, ESTIMATE)",
+            "매도 수수료 (%, 편도, CONFIRMED)",
             min_value=0.0, max_value=5.0, step=0.001, format="%.3f", key="bt_sell_fee_pct",
             disabled=copper_price_basis != config.COPPER_PRICE_BASIS_KRX or not apply_fees,
             help="매도 체결 시마다 그날 매도금액에 부과되는 1회성 수수료입니다. Buy & Hold는 "
@@ -321,10 +326,12 @@ with st.expander("⚙️ 고급 설정 (최소 보유일수 등 — 기본값 �
             min_value=0.0, max_value=5.0, step=0.001, format="%.3f",
             key="bt_etf_expense_ratio_pct",
             disabled=copper_price_basis != config.COPPER_PRICE_BASIS_KRX or not apply_fees,
-            help="KODEX 구리선물(H)의 연간 총보수입니다(기본값 0.68%, 삼성자산운용 공시 기준). "
-            "매수/매도 수수료와 달리 실제 보유 기간에만(신호전략은 보유 중일 때만, Buy & Hold는 "
-            "전체 기간) 발생하며, 계산 시에는 이 연율을 일할 복리 환산"
-            "((1+연율)^(1/365)-1)해 하루 치 요율로 바꿔 매일 잔량에 누적 적용합니다.",
+            help="KODEX 구리선물(H)의 연간 총보수입니다(기본값 0.68%, 삼성자산운용 공식 펀드 "
+            "팩트시트(2025-06-30 기준) 기준 — 지정판매 0.001%+집합투자 0.599%+신탁 0.04%+"
+            "일반사무 0.04%=0.68%). 매수/매도 수수료와 달리 실제 보유 기간에만(신호전략은 보유 "
+            "중일 때만, Buy & Hold는 전체 기간) 발생하며, 이 모델은 매일 무조건 차감되는 구조라 "
+            "15년 누적 시 복리로 약 9~10%p 수준의 훨씬 큰 영향을 줍니다. 계산 시에는 이 연율을 "
+            "일할 복리 환산((1+연율)^(1/365)-1)해 하루 치 요율로 바꿔 매일 잔량에 누적 적용합니다.",
         )
 
 bond_yield_pct = float(st.session_state["bt_bond_yield_pct"])
