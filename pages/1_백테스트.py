@@ -56,6 +56,8 @@ DEFAULTS = {
     "bt_apply_fees": False,
     "bt_buy_fee_pct": backtest.DEFAULT_BUY_FEE_PCT,
     "bt_sell_fee_pct": backtest.DEFAULT_SELL_FEE_PCT,
+    "bt_execution_delay_days": 0,
+    "bt_execution_delay_recheck": False,
 }
 for _key, _default in DEFAULTS.items():
     st.session_state.setdefault(_key, _default)
@@ -122,6 +124,15 @@ with st.expander("전략 규칙 보기"):
 - 고급 설정의 **하락추세 중 매수신호 노이즈 필터** (기본값 OFF)는 위 매도신호 노이즈 필터를
   방향만 반대로 완전히 대칭시킨 조건입니다(180일선 -{buy_buf:g}% 이하일 때만 작동, 매일 갱신
   2시그마 밴드는 위와 동일한 공식으로 상승 기준 8거래일차 +{b8:.2f}% ~ 21거래일차 +{b21:.2f}%).
+- 고급 설정의 **체결 지연**(기본값 0일 = 즉시 체결, 노이즈 필터와는 별개의 무조건 지연)은
+  매수·매도가 결정된 날(D0)의 체결을 D0+N일(역일) 뒤로 미룹니다 — DXY·FXI와 구리의 상관관계는
+  같은 날(lag=0)에 집중된다는 검증 결과(11장)가 있지만, 그 신호로 만든 매매 전략 자체가
+  실제로 며칠·몇 주 늦게 실행해도 통하는지는 별도로 확인해볼 수 있는 값입니다. 매수·매도
+  양쪽에 대칭으로 같은 N이 적용됩니다. **재확인 모드**가 꺼져 있으면(기본값) D0+N일에 그 사이
+  무슨 일이 있었든 무조건 체결하고, 켜져 있으면 D0+N일에도 전체 규칙이 독립적으로 다시
+  매수·매도를 판정해야만 체결합니다(아니면 D0 신호는 버려짐). 거래 내역에는 항상 원래 D0
+  시점의 신호 내용이 사유로 표시되고, 지연 체결분은 "(지연매수/지연매도 N일: D0=... →
+  ... 체결)"이 덧붙습니다.
 - 고급 설정의 **수수료**(② KODEX 구리선물(H) 선택 시에만 적용, ① 국제 구리 시세에는 적용되지
   않음)는 **매수/매도 수수료**(각 기본 {buy_fee:g}%, 편도, 2026년 기준 국내 증권사 상시요율 중
   최저가(하나증권) — CONFIRMED, 매매가 일어날 때마다 1회성 차감) 하나만 명시적으로 반영합니다.
@@ -291,6 +302,35 @@ with st.expander("⚙️ 고급 설정 (최소 보유일수 등 — 기본값 �
         st.caption(f"≈ {min_holding_days / 30:.1f}개월간 매도 조건을 무시하고 무조건 보유")
 
     st.markdown(
+        "**체결 지연 (선행성 검증용)** — DXY·FXI와 구리의 상관관계는 lag=0(당일)에 집중된다는 "
+        "검증 결과가 나왔지만(COPPER_TRADING_LOGIC.md 11장), 그렇다고 이 신호로 만든 매매 "
+        "*전략 자체*가 며칠·몇 주 뒤에 실행해도 여전히 통하는지는 별개의 질문입니다 — 아래로 "
+        "직접 확인해볼 수 있습니다."
+    )
+    delay_col, delay_recheck_col = st.columns(2)
+    with delay_col:
+        execution_delay_days = st.number_input(
+            "매수·매도 체결 지연일수 (역일 기준, 0=즉시)",
+            min_value=0, max_value=90, step=1, key="bt_execution_delay_days",
+            help="green_count·52주 신고가/신저가(및 노이즈 필터를 거친 뒤의 최종 신호)가 매수· "
+            "매도를 결정한 날(D0)에 바로 체결하지 않고, D0+N일(역일) 뒤 그날의 종가로 체결을 "
+            "미룹니다. 매수·매도 양쪽에 대칭으로 동일하게 적용됩니다. 0이면(기본값) 기존과 "
+            "동일하게 신호 당일 즉시 체결합니다. 대기 중에 새로 뜨는 신호는(재확인 모드가 "
+            "꺼져 있으면) 체결 여부에 영향을 주지 않습니다.",
+        )
+    with delay_recheck_col:
+        execution_delay_recheck = st.checkbox(
+            "지연 중 조건 재확인 (꺼짐 시 무조건 체결)",
+            key="bt_execution_delay_recheck",
+            disabled=execution_delay_days == 0,
+            help="꺼짐(기본값): D0+N일에 그 사이 무슨 일이 있었든 무조건 체결합니다 — 'D0의 "
+            "신호가 N일 뒤 가격을 예측하는가'를 가장 순수하게 테스트하는 방식입니다. 켜짐: "
+            "D0+N일 그날도 (노이즈 필터를 포함한) 전체 규칙이 독립적으로 다시 매수·매도를 "
+            "판정해야만 체결하고, 그렇지 않으면 D0의 신호는 없었던 것으로 버려집니다. 거래 "
+            "내역의 매수·매도 사유에는 항상 원래 D0 시점의 신호 내용이 표시됩니다.",
+        )
+
+    st.markdown(
         "**수수료** (② KODEX 구리선물(H) 선택 시에만 적용 — ① 국제 구리 시세는 실물이 아닌 "
         "참고 가격이라 적용되지 않음)"
     )
@@ -364,6 +404,8 @@ _shared_sim_kwargs = dict(
     use_buy_noise_filter=use_buy_noise_filter,
     use_buy_daily_band_confirmation=use_buy_daily_band_confirmation,
     buy_noise_filter_rise_pct=float(buy_noise_filter_rise_pct),
+    execution_delay_days=int(execution_delay_days),
+    execution_delay_recheck=execution_delay_recheck,
 )
 
 try:
@@ -487,7 +529,7 @@ with chart_opt_col1:
 with chart_opt_col2:
     show_bh_line = st.checkbox(f"{BH_LABEL} 표시", value=True, key="bt_chart_show_bh")
 with chart_opt_col3:
-    show_net_fees = st.checkbox("수수료 반영 곡선 표시", value=True, key="bt_chart_show_net")
+    show_net_fees = st.checkbox("수수료 반영 곡선 표시", value=False, key="bt_chart_show_net")
 
 dates = equity.index
 bh_returns = (bh_equity if show_net_fees else bh_equity_gross).reindex(dates).to_numpy() - 1.0

@@ -322,16 +322,47 @@ def run_backtest(
     buy_fee_pct: float = 0.0,
     sell_fee_pct: float = 0.0,
     daily_holding_fee_pct: float = 0.0,
+    execution_delay_days: int = 0,
+    execution_delay_recheck: bool = False,
 ) -> tuple[list[dict], pd.Series, pd.Series, pd.Series, list[dict], list[dict]]:
     """Walks the signal frame day by day applying the buy/sell rules.
 
-    Every trigger fills immediately at its own signal day's close — there is
-    no delay/lag setting anywhere in this state machine:
+    Every trigger fills immediately at its own signal day's close by
+    default — there is no delay/lag anywhere in this state machine unless
+    `execution_delay_days` is set above 0 (see below):
     - **green_count** (buy: `>= buy_green_count`, sell: `<= sell_green_count`).
     - The **52-week new-high trigger** (`use_new_high_trigger`, buy side, on
       by default) and the **52-week new-low trigger** (`use_new_low_trigger`,
       sell side, on by default). Neither has a cooldown/frequency limit of
       its own.
+
+    `execution_delay_days` (default 0 = immediate, matching the description
+    above exactly): once the rules above (including any noise-filter
+    resolution) decide "buy/sell today" on some day D0, this holds that fill
+    back by `execution_delay_days` CALENDAR days and executes it at D0+N's
+    close instead of D0's — symmetric for both buy and sell, on top of and
+    independent from the noise filters. This exists to test whether the
+    green_count/52-week signals carry information that only pays off with a
+    delay (the correlation validation in COPPER_TRADING_LOGIC.md 11장 found
+    DXY/FXI's relationship with copper concentrates almost entirely at
+    lag=0, i.e. same-day, but that finding doesn't rule out the executed
+    strategy itself performing differently N days later — this lets that be
+    checked directly rather than assumed). While a fill is pending (D0 through
+    D0+N-1), no other buy/sell evaluation happens on that side (a second
+    qualifying signal during the wait does not restart or cancel it, except
+    per `execution_delay_recheck` below). `execution_delay_recheck` selects
+    what happens at D0+N:
+    - `False` (default): fires UNCONDITIONALLY at D0+N's close regardless of
+      what the signal has done in between (the purest test of "does the D0
+      signal predict the price N days later").
+    - `True`: only fires if the same full rule set (green_count/52-week
+      trigger, post any noise filter) independently still says "buy/sell"
+      again on D0+N itself; otherwise the pending fill is dropped entirely
+      and D0 is discarded (as if it never fired) rather than retried.
+    The trade's recorded entry/exit reason always cites the ORIGINAL D0
+    trigger (annotated with the D0->D0+N date range and which of the two
+    modes above resolved it), even in recheck mode, since D0's condition is
+    what's being tested — not whatever happens to also be true on D0+N.
 
     `min_holding_days`: once a position is opened, every sell trigger
     (green_count or 52-week new-low) is ignored entirely until at least this
@@ -404,6 +435,8 @@ def run_backtest(
     sell_noise_log: list[dict] = []
     buy_noise_state = None
     buy_noise_log: list[dict] = []
+    buy_delay_state = None  # {"d0_date", "reason"} while a buy fill awaits execution_delay_days
+    sell_delay_state = None  # symmetric, for a pending sell fill
     trades: list[dict] = []
     equity_values = []
     holding_values = []
@@ -507,6 +540,26 @@ def run_backtest(
                 else:
                     entry_reason_today = raw_entry_reason_today
 
+            if execution_delay_days > 0:
+                if buy_delay_state is not None:
+                    elapsed_days = (dt - buy_delay_state["d0_date"]).days
+                    if elapsed_days >= execution_delay_days:
+                        d0_date = buy_delay_state["d0_date"]
+                        if execution_delay_recheck and entry_reason_today is None:
+                            entry_reason_today = None  # condition no longer holds -> D0 discarded
+                        else:
+                            mode_note = "조건 재확인 통과" if execution_delay_recheck else "무조건 체결"
+                            entry_reason_today = (
+                                f"{buy_delay_state['reason']} (지연매수 {execution_delay_days}일: "
+                                f"D0={d0_date.date()} → {dt.date()} {mode_note})"
+                            )
+                        buy_delay_state = None
+                    else:
+                        entry_reason_today = None  # still waiting on the pending fill
+                elif entry_reason_today is not None:
+                    buy_delay_state = {"d0_date": dt, "reason": entry_reason_today}
+                    entry_reason_today = None
+
             if entry_reason_today is not None:
                 holding = True
                 entry_date = dt
@@ -514,6 +567,7 @@ def run_backtest(
                 entry_reason = entry_reason_today
                 equity_at_entry = running_equity * (1.0 - buy_fee_pct / 100.0)
                 sell_noise_state = None  # defensive: a fresh position starts with no open episode
+                sell_delay_state = None  # defensive: same, for the delay-fill mechanism
         else:
             exit_reason_today = None
             if (dt - entry_date).days >= min_holding_days:
@@ -604,6 +658,26 @@ def run_backtest(
                     }
                     exit_reason_today = None
 
+            if execution_delay_days > 0:
+                if sell_delay_state is not None:
+                    elapsed_days = (dt - sell_delay_state["d0_date"]).days
+                    if elapsed_days >= execution_delay_days:
+                        d0_date = sell_delay_state["d0_date"]
+                        if execution_delay_recheck and exit_reason_today is None:
+                            exit_reason_today = None  # condition no longer holds -> D0 discarded
+                        else:
+                            mode_note = "조건 재확인 통과" if execution_delay_recheck else "무조건 체결"
+                            exit_reason_today = (
+                                f"{sell_delay_state['reason']} (지연매도 {execution_delay_days}일: "
+                                f"D0={d0_date.date()} → {dt.date()} {mode_note})"
+                            )
+                        sell_delay_state = None
+                    else:
+                        exit_reason_today = None  # still waiting on the pending fill
+                elif exit_reason_today is not None:
+                    sell_delay_state = {"d0_date": dt, "reason": exit_reason_today}
+                    exit_reason_today = None
+
             if exit_reason_today is not None:
                 exit_price = price
                 fee_factor = _daily_fee_decay((dt - entry_date).days, daily_holding_fee_pct)
@@ -630,6 +704,7 @@ def run_backtest(
                 entry_price = None
                 entry_reason = None
                 equity_at_entry = None
+                buy_delay_state = None  # defensive: a fresh flat state starts with no open episode
 
         if holding:
             fee_factor = _daily_fee_decay((dt - entry_date).days, daily_holding_fee_pct)
@@ -876,6 +951,8 @@ def simulate(
     buy_fee_pct: float = 0.0,
     sell_fee_pct: float = 0.0,
     daily_holding_fee_pct: float = 0.0,
+    execution_delay_days: int = 0,
+    execution_delay_recheck: bool = False,
 ) -> dict:
     """The pure-computation half: run the trade state machine over already-
     prepared signals and derive trades/equity curves/metrics/yearly returns."""
@@ -897,6 +974,8 @@ def simulate(
         buy_fee_pct=buy_fee_pct,
         sell_fee_pct=sell_fee_pct,
         daily_holding_fee_pct=daily_holding_fee_pct,
+        execution_delay_days=execution_delay_days,
+        execution_delay_recheck=execution_delay_recheck,
     )
     metrics_out = compute_metrics(trades, equity_curve, bh_equity_curve)
     hybrid = compute_hybrid_cagr(
@@ -939,6 +1018,8 @@ def run(
     buy_fee_pct: float = 0.0,
     sell_fee_pct: float = 0.0,
     daily_holding_fee_pct: float = 0.0,
+    execution_delay_days: int = 0,
+    execution_delay_recheck: bool = False,
 ) -> dict:
     signals = prepare_signals(as_of, years=years, copper_price_basis=copper_price_basis)
     result = simulate(
@@ -960,6 +1041,8 @@ def run(
         buy_fee_pct=buy_fee_pct,
         sell_fee_pct=sell_fee_pct,
         daily_holding_fee_pct=daily_holding_fee_pct,
+        execution_delay_days=execution_delay_days,
+        execution_delay_recheck=execution_delay_recheck,
     )
     result["signals"] = signals
     return result
