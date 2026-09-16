@@ -56,7 +56,6 @@ DEFAULTS = {
     "bt_apply_fees": False,
     "bt_buy_fee_pct": backtest.DEFAULT_BUY_FEE_PCT,
     "bt_sell_fee_pct": backtest.DEFAULT_SELL_FEE_PCT,
-    "bt_etf_expense_ratio_pct": backtest.DEFAULT_ETF_ANNUAL_EXPENSE_RATIO_PCT,
 }
 for _key, _default in DEFAULTS.items():
     st.session_state.setdefault(_key, _default)
@@ -124,14 +123,16 @@ with st.expander("전략 규칙 보기"):
   방향만 반대로 완전히 대칭시킨 조건입니다(180일선 -{buy_buf:g}% 이하일 때만 작동, 매일 갱신
   2시그마 밴드는 위와 동일한 공식으로 상승 기준 8거래일차 +{b8:.2f}% ~ 21거래일차 +{b21:.2f}%).
 - 고급 설정의 **수수료**(② KODEX 구리선물(H) 선택 시에만 적용, ① 국제 구리 시세에는 적용되지
-  않음)는 KODEX 구리선물(H)의 실제 비용 구조를 반영합니다: **매수/매도 수수료**(각 기본
-  {buy_fee:g}%, 편도, 2026년 기준 국내 증권사 상시요율 중 최저가(하나증권) — CONFIRMED, 매매가
-  일어날 때마다 1회성 차감)와 **총보수**(기본 연 {expense:g}%, 삼성자산운용 공식 펀드 팩트시트
-  기준 — CONFIRMED, 보유 잔량에 대해 일할 복리 환산해 매일 누적 적용). 이 모델은 15년에 30건
-  미만(연 2건 미만)의 저빈도 매매 구조라, 매매수수료가 결과에 미치는 영향은 크지 않고
-  (누적해도 총 1%p 미만) 매일 무조건 차감되는 총보수 쪽이 15년 누적 기준 복리로 훨씬 큰
-  영향(약 9~10%p)을 줍니다. "수수료 반영" 체크박스로 전부 껐다 켤 수 있고, 차트에서는
-  이 값과 별개로 수수료 반영/미반영 곡선을 토글로 비교할 수 있습니다
+  않음)는 **매수/매도 수수료**(각 기본 {buy_fee:g}%, 편도, 2026년 기준 국내 증권사 상시요율 중
+  최저가(하나증권) — CONFIRMED, 매매가 일어날 때마다 1회성 차감) 하나만 명시적으로 반영합니다.
+  KODEX 구리선물(H)의 연간 총보수(0.68%)는 **별도로 차감하지 않습니다** — ② 기준이 사용하는
+  가격은 이론가가 아니라 이 ETF의 실제 관측 체결가이고, 펀드 총보수는 매일 펀드 자산에서
+  차감되어 이미 그 관측가(NAV를 근접 추종)에 반영돼 있기 때문입니다. 여기에 총보수를 또
+  일할 차감하면 같은 비용을 이중으로 빼는 것이 되어(2026-09-16 발견 및 수정 — 자세한 내용은
+  COPPER_TRADING_LOGIC.md 6-2장 참고), 이 프로젝트는 관측 시장가를 그대로 신뢰하고 총보수를
+  별도 파라미터로 다시 부과하지 않기로 했습니다. "수수료 반영" 체크박스로 매수/매도 수수료를
+  껐다 켤 수 있고, 차트에서는 이 값과 별개로 수수료 반영/미반영 곡선을 토글로 비교할 수
+  있습니다
 - 분석 기간: **{years}년** (1~15년 조정 가능, 이동평균 계산용으로 그 이전 {buffer}캘린더일치
   데이터를 추가로 사용). 기본은 오늘을 기준으로 최근 {years}년이지만, "기준일 (오늘로부터
   N년 전)"을 0보다 크게 설정하면 분석 종료일 자체가 그만큼 과거로 이동합니다 (현재 설정:
@@ -145,7 +146,6 @@ with st.expander("전략 규칙 보기"):
             b14=backtest.noise_band_pct(14) * 100.0,
             b21=backtest.noise_band_pct(21) * 100.0,
             buy_fee=backtest.DEFAULT_BUY_FEE_PCT,
-            expense=backtest.DEFAULT_ETF_ANNUAL_EXPENSE_RATIO_PCT,
             years=int(st.session_state["bt_years"]),
             buffer=backtest.BUFFER_DAYS,
             asof_years_ago=int(st.session_state["bt_asof_years_ago"]),
@@ -301,7 +301,7 @@ with st.expander("⚙️ 고급 설정 (최소 보유일수 등 — 기본값 �
         help="체크를 해제하면 아래 입력값과 무관하게 전부 0으로 두고 계산합니다(입력값 자체는 "
         "그대로 남아있어 다시 체크하면 복원됩니다).",
     )
-    fee_buy_col, fee_sell_col, fee_holding_col = st.columns(3)
+    fee_buy_col, fee_sell_col = st.columns(2)
     with fee_buy_col:
         buy_fee_pct = st.number_input(
             "매수 수수료 (%, 편도, CONFIRMED)",
@@ -320,19 +320,14 @@ with st.expander("⚙️ 고급 설정 (최소 보유일수 등 — 기본값 �
             help="매도 체결 시마다 그날 매도금액에 부과되는 1회성 수수료입니다. Buy & Hold는 "
             "분석기간 종료 시점에 전량 매도한다고 가정해 이 수수료를 마지막 날 1회 반영합니다.",
         )
-    with fee_holding_col:
-        etf_expense_ratio_pct = st.number_input(
-            "총보수 (%, 연율, CONFIRMED)",
-            min_value=0.0, max_value=5.0, step=0.001, format="%.3f",
-            key="bt_etf_expense_ratio_pct",
-            disabled=copper_price_basis != config.COPPER_PRICE_BASIS_KRX or not apply_fees,
-            help="KODEX 구리선물(H)의 연간 총보수입니다(기본값 0.68%, 삼성자산운용 공식 펀드 "
-            "팩트시트(2025-06-30 기준) 기준 — 지정판매 0.001%+집합투자 0.599%+신탁 0.04%+"
-            "일반사무 0.04%=0.68%). 매수/매도 수수료와 달리 실제 보유 기간에만(신호전략은 보유 "
-            "중일 때만, Buy & Hold는 전체 기간) 발생하며, 이 모델은 매일 무조건 차감되는 구조라 "
-            "15년 누적 시 복리로 약 9~10%p 수준의 훨씬 큰 영향을 줍니다. 계산 시에는 이 연율을 "
-            "일할 복리 환산((1+연율)^(1/365)-1)해 하루 치 요율로 바꿔 매일 잔량에 누적 적용합니다.",
-        )
+    st.caption(
+        "KODEX 구리선물(H)의 연간 총보수(0.68%, CONFIRMED — 삼성자산운용 공식 펀드 팩트시트 "
+        "기준)는 여기서 별도로 차감하지 **않습니다**. ② 기준이 쓰는 가격은 이론가가 아니라 이 "
+        "ETF의 실제 관측 체결가이며, 펀드 총보수는 매일 펀드 자산에서 차감되어 이미 그 관측가"
+        "(NAV를 근접 추종)에 반영돼 있습니다 — 여기에 또 일할 차감하면 같은 비용을 이중으로 "
+        "빼는 것이 되어(2026-09-16 발견 및 수정), 매수/매도 수수료만 명시적으로 반영하고 총보수는 "
+        "관측 가격에 맡깁니다. 자세한 내용은 COPPER_TRADING_LOGIC.md 6-2장 참고."
+    )
 
 bond_yield_pct = float(st.session_state["bt_bond_yield_pct"])
 
@@ -353,10 +348,10 @@ def _format_copper_price(value: float, basis: str = copper_price_basis) -> str:
 _fees_active = apply_fees and copper_price_basis == config.COPPER_PRICE_BASIS_KRX
 effective_buy_fee_pct = float(buy_fee_pct) if _fees_active else 0.0
 effective_sell_fee_pct = float(sell_fee_pct) if _fees_active else 0.0
-# etf_expense_ratio_pct는 연율 입력값이므로 simulate()의 daily_holding_fee_pct
-# (하루 치 요율) 계약에 맞춰 여기서만 일할 복리 환산한다.
-_daily_holding_fee_pct = backtest.annual_to_daily_fee_pct(float(etf_expense_ratio_pct))
-effective_daily_holding_fee_pct = _daily_holding_fee_pct if _fees_active else 0.0
+# No daily_holding_fee_pct here: KODEX 구리선물(H)'s 총보수 is already embedded
+# in the ETF's observed market price under basis ②, so charging it again as a
+# separate daily deduction would double-count it — see backtest.py's fee
+# comment block and COPPER_TRADING_LOGIC.md 6-2장.
 
 _shared_sim_kwargs = dict(
     use_new_high_trigger=use_new_high_trigger,
@@ -380,7 +375,6 @@ try:
         sell_green_count=int(sell_green_count),
         buy_fee_pct=effective_buy_fee_pct,
         sell_fee_pct=effective_sell_fee_pct,
-        daily_holding_fee_pct=effective_daily_holding_fee_pct,
     )
     result_gross = backtest.simulate(
         signals,
@@ -389,7 +383,6 @@ try:
         sell_green_count=int(sell_green_count),
         buy_fee_pct=0.0,
         sell_fee_pct=0.0,
-        daily_holding_fee_pct=0.0,
     )
 except Exception as exc:
     st.error(f"백테스트를 실행하지 못했습니다: {exc}")

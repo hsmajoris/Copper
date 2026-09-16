@@ -159,11 +159,10 @@ DEFAULT_BOND_ANNUAL_YIELD = 0.10
 
 # ---------------------------------------------------------------------------
 # KODEX 구리선물(H) (138910) real trading costs — see COPPER_TRADING_LOGIC.md
-# 6-2장 for the full writeup of why this is structured differently from
-# Gold's KRX 금현물 fee model. Gold's domestic instrument is a real physical
-# spot market (no expense ratio, but a separate custody/storage fee); this
-# project's domestic instrument is a listed, actively-managed ETF, so the
-# cost structure is genuinely different:
+# 6-2장 for the full writeup, including why this project charges only ONE
+# explicit cost here (unlike Gold's KRX 금현물 model, which charges both a
+# transaction fee AND a daily custody fee on top of a raw physical spot
+# price that embeds neither):
 #   - Transaction fee: a small, one-time online-brokerage commission on the
 #     traded notional, charged at every buy and every sell fill. 0.014% here
 #     is CONFIRMED against 2026 standard (non-event) online HTS/MTS ETF
@@ -173,44 +172,44 @@ DEFAULT_BOND_ANNUAL_YIELD = 0.10
 #     promotional rates as low as 0.003-0.004%, but those are time-limited
 #     events, not something a long-horizon default should assume — swap
 #     DEFAULT_BUY_FEE_PCT/DEFAULT_SELL_FEE_PCT for your own broker's actual
-#     schedule.
-#   - Ongoing fund cost: KODEX 구리선물(H)'s own published 총보수 (total
-#     expense ratio) is 0.68%/year (CONFIRMED against Samsung Asset
+#     schedule. This is a real external cost (a brokerage fee charged on top
+#     of whatever price you traded at) that is never embedded in the traded
+#     price itself, so charging it here is not double-counting anything.
+#   - Ongoing fund cost (총보수, 0.68%/year, CONFIRMED against Samsung Asset
 #     Management's own official fund fact sheet, 기준일 2025-06-30:
-#     지정판매 0.001% + 집합투자 0.599% + 신탁 0.04% + 일반사무 0.04% = 0.68%).
-#     Modeled as a daily-compounding holding-fee accrual on whatever is
-#     actually held, using the SAME annual-to-daily conversion Gold's own
-#     project already uses for its "TIGER KRX금현물(ETF)" fee option
-#     ((1+annual%)^(1/365) - 1) — see the 유효성 검증 page for where that
-#     conversion happens. This is a deliberate structural choice, not a
-#     blind copy of Gold's KRX 금현물 daily-rate constant: an ETF's ongoing
-#     cost is disclosed as an ANNUAL rate, not Gold's real-asset custody
-#     fee's already-daily rate.
+#     지정판매 0.001% + 집합투자 0.599% + 신탁 0.04% + 일반사무 0.04% = 0.68%)
+#     is DELIBERATELY NOT charged anywhere in this simulation as a separate
+#     daily deduction. Unlike Gold's KRX 금현물 (a raw physical spot quote
+#     with no expense ratio baked in at all), this project's ② KRX basis
+#     uses KODEX 구리선물(H)'s own OBSERVED, ACTUALLY-TRADED market close
+#     (ts.fetch_backtest_frame -> fetch_copper_price_series -> data_sources.
+#     fetch_krx_copper_etf_krw, real Naver-sourced prints, not a price
+#     reconstructed from HG=F). A fund's total expense ratio is accrued
+#     daily against the fund's own assets and is therefore already reflected
+#     in its NAV's day-to-day path, which the ETF's market price tracks
+#     closely — so this observed price series already has the 0.68%/year
+#     cost embedded in it. An earlier version of this module additionally
+#     applied `annual_to_daily_fee_pct(0.68)` as an explicit daily_holding_
+#     fee_pct on top of this same observed price, which double-charged that
+#     0.68%/year (confirmed after this was flagged and investigated — see
+#     COPPER_TRADING_LOGIC.md 6-2장/9장). That extra deduction has been
+#     removed; only the transaction fee above remains as an explicit cost.
 #     Note (relevant when comparing ① HG=F vs ② KODEX 구리선물(H) backtest
 #     results): the same fact sheet shows this ETF's since-inception return
 #     diverging sharply from its own benchmark index (ETF -16.40% vs index
-#     +13.98% as of 2025-06-30, a -30.38%p tracking gap) — this is roll
-#     yield/contango cost on the futures the fund actually holds, not a fee
-#     this simulation charges anywhere. Any large ①/② result gap should not
-#     be attributed to buy_fee_pct/sell_fee_pct/daily_holding_fee_pct alone;
-#     most of a large gap is this futures-roll/tracking basis, which this
-#     backtest reproduces automatically simply by using the ETF's own actual
-#     traded price series under basis ②, not by any explicit fee parameter.
+#     +13.98% as of 2025-06-30, a -30.38%p tracking gap) — mostly futures
+#     roll yield/contango cost and FX-hedging cost on the futures the fund
+#     actually holds (not the 0.68%/year expense ratio alone, which would
+#     only account for a few percentage points of that gap over the same
+#     span). None of this is charged anywhere by this simulation as an
+#     explicit fee; it is reproduced automatically, exactly once, simply by
+#     using the ETF's own actual traded price series under basis ②.
 # Both are meaningless for the international HG=F basis (a paper reference
 # price, not a tradable domestic instrument) — the UI is responsible for
 # passing 0.0 there; simulate()/run_backtest() themselves don't know or care
 # which basis is in use, only the fee rates they're given.
 DEFAULT_BUY_FEE_PCT = 0.014  # CONFIRMED — 하나증권 2026 standard (non-event) ETF commission
 DEFAULT_SELL_FEE_PCT = 0.014  # CONFIRMED — see above
-DEFAULT_ETF_ANNUAL_EXPENSE_RATIO_PCT = 0.68  # CONFIRMED — KODEX 구리선물(H) 총보수(연), Samsung Asset Mgmt fact sheet 2025-06-30
-
-
-def annual_to_daily_fee_pct(annual_pct: float) -> float:
-    """Converts an annual %, compounded daily over 365 days, to the flat
-    daily rate _daily_fee_decay expects: (1 + annual%)^(1/365) - 1, expressed
-    as a % again. Used for KODEX 구리선물(H)'s annual 총보수 — see
-    DEFAULT_ETF_ANNUAL_EXPENSE_RATIO_PCT above."""
-    return ((1.0 + annual_pct / 100.0) ** (1.0 / 365.0) - 1.0) * 100.0
 
 
 def _daily_fee_decay(elapsed_days: float, daily_fee_pct: float) -> float:
