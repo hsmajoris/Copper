@@ -12,9 +12,9 @@ from . import metrics
 from . import signals
 from .timeutil import today_kst
 
-# Lookback window behind the as-of date, long enough for the 90-day calendar
-# SMA plus a comfortable margin for breakout-streak history (mirrors the Gold
-# dashboard's "2y" default).
+# Lookback window behind the as-of date, long enough for the longest
+# config.MA_WINDOWS calendar SMA (60 days) plus a comfortable margin for
+# breakout-streak history (mirrors the Gold dashboard's "2y" default).
 LOOKBACK_DAYS = 730
 
 

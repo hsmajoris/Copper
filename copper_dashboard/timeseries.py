@@ -21,9 +21,9 @@ FXI_TICKERS = ["FXI"]
 COPPER_TICKER = "HG=F"
 YEARS = 7
 BUFFER_DAYS = 110  # extra calendar days of history fetched before the display/analysis
-# start, so the longest calendar-day SMA (config.MA_WINDOWS' 90-day window)
+# start, so the longest calendar-day SMA (config.MA_WINDOWS' 60-day window)
 # already has a full window on day 1 of that period, with a margin over the
-# bare minimum of 90.
+# bare minimum of 60.
 
 # Raw single-series sources, keyed by a short id (not all of these are dashboard
 # indicator keys — "copper" is also fetched on its own for the backtest/chart
@@ -36,7 +36,7 @@ def fetch_raw_series(
 ) -> pd.Series:
     """Fetch one raw series (dxy/fxi/copper) covering `years` + `buffer_days`
     of history ending at `as_of` (default: today, KST). `buffer_days`
-    defaults to BUFFER_DAYS (enough to warm up a 90-day SMA) but callers
+    defaults to BUFFER_DAYS (enough to warm up a 60-day SMA) but callers
     needing a longer rolling window (e.g. the backtest's 52-week trigger)
     can pass a bigger value."""
     end_date = as_of or today_kst()

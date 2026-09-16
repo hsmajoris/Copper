@@ -28,7 +28,7 @@ EARLIEST_DATE = date(2000, 1, 1)
 # categorical slot 2 (bronze/copper tone) so it never reads as "one more shade
 # of the same family" on its own (right-hand) axis.
 CHART_INDICATOR_COLOR = "#256abf"
-CHART_SMA_COLORS = {7: "#5598e7", 20: "#86b6ef", 90: "#b7d3f6"}
+CHART_SMA_COLORS = {7: "#5598e7", 20: "#86b6ef", 60: "#b7d3f6"}
 CHART_COPPER_COLOR = "#b5651d"
 CHART_SIGNAL_SHADE_COLOR = "#e34948"
 CHART_SIGNAL_SHADE_OPACITY = 0.16
