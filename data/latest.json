@@ -1,0 +1,121 @@
+{
+  "generated_at": "2026-09-17T07:12:09.186201+09:00",
+  "requested_as_of": null,
+  "as_of": "2026-09-16",
+  "indicator_order": [
+    "dxy",
+    "fxi"
+  ],
+  "indicators": {
+    "dxy": {
+      "label": "달러인덱스",
+      "source": "Yahoo Finance (DX-Y.NYB)",
+      "as_of": "2026-09-16",
+      "prev_close": {
+        "value": 100.33,
+        "display": "100.33"
+      },
+      "sma": {
+        "90": {
+          "ma_value": 100.2044,
+          "ma_display": "100.20",
+          "status_text": "상향 돌파",
+          "display": "100.20 (종가 100.33 → 상향 돌파)",
+          "streak": 1,
+          "breakout": true,
+          "streak_display": "1일째",
+          "copper_friendly": false
+        },
+        "30": {
+          "ma_value": 99.2481,
+          "ma_display": "99.25",
+          "status_text": "상향 돌파",
+          "display": "99.25 (종가 100.33 → 상향 돌파)",
+          "streak": 3,
+          "breakout": true,
+          "streak_display": "3일째",
+          "copper_friendly": false
+        },
+        "7": {
+          "ma_value": 99.53,
+          "ma_display": "99.53",
+          "status_text": "상향 돌파",
+          "display": "99.53 (종가 100.33 → 상향 돌파)",
+          "streak": 5,
+          "breakout": true,
+          "streak_display": "5일째",
+          "copper_friendly": false
+        }
+      }
+    },
+    "fxi": {
+      "label": "FXI (iShares China Large-Cap ETF)",
+      "source": "Yahoo Finance (FXI)",
+      "as_of": "2026-09-16",
+      "prev_close": {
+        "value": 33.92,
+        "display": "$33.92"
+      },
+      "sma": {
+        "90": {
+          "ma_value": 34.5843,
+          "ma_display": "$34.58",
+          "status_text": "이평선 아래",
+          "display": "$34.58 (종가 $33.92 → 이평선 아래)",
+          "streak": 0,
+          "breakout": false,
+          "streak_display": "",
+          "copper_friendly": false
+        },
+        "30": {
+          "ma_value": 35.1762,
+          "ma_display": "$35.18",
+          "status_text": "이평선 아래",
+          "display": "$35.18 (종가 $33.92 → 이평선 아래)",
+          "streak": 0,
+          "breakout": false,
+          "streak_display": "",
+          "copper_friendly": false
+        },
+        "7": {
+          "ma_value": 34.4,
+          "ma_display": "$34.40",
+          "status_text": "이평선 아래",
+          "display": "$34.40 (종가 $33.92 → 이평선 아래)",
+          "streak": 0,
+          "breakout": false,
+          "streak_display": "",
+          "copper_friendly": false
+        }
+      }
+    }
+  },
+  "static_rows": {
+    "구조": {
+      "dxy": "6개국 통화 바스켓 내 달러 비율",
+      "fxi": "중국 대형주 50종목 추종 ETF (뉴욕 상장, USD)"
+    },
+    "의미": {
+      "dxy": "달러 표시 원자재인 구리의 역내 구매력에 영향 — 달러 강세 시 비달러권의 실물 수요가 위축되는 경로로 작용함",
+      "fxi": "세계 최대 구리 소비국인 중국의 경기·산업 활동에 대한 시장의 실시간 평가를 담은 가격 기반 대리지표 — 중국 대형주(다수가 금융·산업·에너지 섹터)의 주가가 오른다는 것은 시장이 중국의 경기 확장(=구리 수요 확대)을 반영하고 있다는 신호로 해석"
+    },
+    "상관관계 방향": {
+      "dxy": "역상관 (구조적 음(-)의 상관)",
+      "fxi": "정상관 (중국 경기 프록시 — 금 프로젝트의 실질금리·DXY와 달리 방향이 반대(positive)인 지표)"
+    }
+  },
+  "row_order": [
+    "구조",
+    "의미",
+    "상관관계 방향"
+  ],
+  "ma_windows": [
+    90,
+    30,
+    7
+  ],
+  "footnotes": {
+    "dxy": "업계 자료 기준 상관계수 약 -0.65~-0.82 수준으로 보고되나 학술 피어리뷰로 확정된 수치는 아님. 이 프로젝트 자체 검증(2005-01~2026-09, HG=F 일간수익률 기준, 2년 단위 11개 구간): 전 구간에서 방향이 한 번도 바뀌지 않고 R²(설명력) 0.021~0.230 사이에서 일관되게 역상관 (COPPER_TRADING_LOGIC.md 11장 참고).",
+    "fxi": "중국 제조업 PMI·산업생산 같은 공식 통계는 발표 주기가 월 단위로 느리고 개정(수정 발표)이 잦아, 이 프로젝트는 그 대신 매일 갱신되는 시장가격 기반 대리지표(FXI)를 채택함 — 장단점은 COPPER_TRADING_LOGIC.md 9·10장 참고. 이 프로젝트 자체 검증(2005-01~2026-09, 일간수익률 기준, 2년 단위 11개 구간): 전 구간에서 방향이 한 번도 바뀌지 않고 R² 0.035~0.355 사이에서 일관되게 정상관. 원래 CHII(Global X MSCI China Industrials ETF)를 검토했으나 상장폐지에 가까운 상태(최근 데이터 사실상 없음)라 FXI로 대체함."
+  }
+}
