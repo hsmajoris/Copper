@@ -20,9 +20,11 @@ INDICATOR_ORDER = ["dxy", "fxi"]
 
 # Calendar-day (역일) windows, not trading-day counts — metrics.compute_sma
 # averages every observation within the trailing N calendar days, whatever
-# number of trading days that happens to contain. Standardized to the
-# 일주일(week)/한달(month)/세달(quarter) units used throughout this project.
-MA_WINDOWS = [90, 30, 7]
+# number of trading days that happens to contain. 7/90 stay the 일주일(week)/
+# 세달(quarter) units used throughout this project; the middle window was
+# changed from 30(한달) to 20 calendar days at the user's direct request
+# (2026-09) — COPPER_TRADING_LOGIC.md 9장 참고.
+MA_WINDOWS = [90, 20, 7]
 
 # Indicators that actually feed a real buy/sell trigger (the dxy+fxi
 # green_count condition). Both of copper's indicators are signal

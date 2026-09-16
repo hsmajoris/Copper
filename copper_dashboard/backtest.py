@@ -58,8 +58,8 @@ BACKTEST_YEARS = 10
 # chart fetches.
 BUFFER_DAYS = 430
 
-# green_count now sums 2 indicators (dxy, fxi) x 3 windows (90/30/7 calendar
-# days) = 6 cells, same 0-6 range and same unanimity defaults as Gold's
+# green_count now sums 2 indicators (dxy, fxi) x 3 windows (config.MA_WINDOWS,
+# 90/20/7 calendar days) = 6 cells, same 0-6 range and same unanimity defaults as Gold's
 # real_rate+dxy pair (see COPPER_TRADING_LOGIC.md 3장/11장 for why this
 # starts at Gold's own defaults rather than a freshly-tuned number — the
 # task brief asked for these to start identical and be adjusted later, if

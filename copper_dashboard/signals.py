@@ -34,8 +34,8 @@ def indicator_direction(indicator_key: str) -> str:
 
 
 def all_windows_copper_friendly_for(indicator_key: str, value: pd.Series, smas: dict) -> pd.Series:
-    """AND across every {window: sma_series} in `smas` (e.g. {7: sma7, 30:
-    sma30, 90: sma90}): True only on days ALL of those windows agree the
+    """AND across every {window: sma_series} in `smas` (e.g. {7: sma7, 20:
+    sma20, 90: sma90}): True only on days ALL of those windows agree the
     indicator (resolving its correlation direction from config) is
     copper-friendly. This is the condition used for the main dashboard's
     per-indicator chart shading — a stricter, single-indicator condition

@@ -215,8 +215,8 @@ with buy_card:
         buy_green_count = st.number_input(
             "green_count 임계값 (이상)",
             min_value=0, max_value=6, step=1, key="bt_buy_green_count",
-            help="DXY·FXI × 7/30/90일(역일) 이평선, 총 6개 셀 중 구리 가격에 우호적인 셀 수가 "
-            "이 값 이상이면 그날 즉시 매수 신호.",
+            help=f"DXY·FXI × {'/'.join(str(w) for w in sorted(config.MA_WINDOWS))}일(역일) 이평선, "
+            "총 6개 셀 중 구리 가격에 우호적인 셀 수가 이 값 이상이면 그날 즉시 매수 신호.",
         )
 with sell_card:
     with st.container(border=True):

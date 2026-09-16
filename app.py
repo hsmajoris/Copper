@@ -23,12 +23,12 @@ DATA_PATH = Path(__file__).resolve().parent / "data" / "latest.json"
 EARLIEST_DATE = date(2000, 1, 1)
 
 # dataviz reference palette: the indicator gets a sequential blue ramp (darkest =
-# its own daily close, progressively lighter for the 7/30/90-calendar-day SMAs
+# its own daily close, progressively lighter for the config.MA_WINDOWS SMAs
 # so shorter windows read closer to the raw series), copper price gets
 # categorical slot 2 (bronze/copper tone) so it never reads as "one more shade
 # of the same family" on its own (right-hand) axis.
 CHART_INDICATOR_COLOR = "#256abf"
-CHART_SMA_COLORS = {7: "#5598e7", 30: "#86b6ef", 90: "#b7d3f6"}
+CHART_SMA_COLORS = {7: "#5598e7", 20: "#86b6ef", 90: "#b7d3f6"}
 CHART_COPPER_COLOR = "#b5651d"
 CHART_SIGNAL_SHADE_COLOR = "#e34948"
 CHART_SIGNAL_SHADE_OPACITY = 0.16
@@ -89,15 +89,16 @@ def render_indicator_chart(indicator_key: str, label: str, as_of_iso: str) -> No
         {"date": d, "value": v, "series": indicator_series_name}
         for d, v in chart_data["indicator"].items()
     ]
-    window_labels = {7: "7일 이동평균", 30: "30일 이동평균", 90: "90일 이동평균"}
-    for window in (7, 30, 90):
+    ma_windows = sorted(config.MA_WINDOWS)
+    window_labels = {window: f"{window}일 이동평균" for window in ma_windows}
+    for window in ma_windows:
         sma_series = chart_data["smas"][window]
         left_rows.extend(
             {"date": d, "value": v, "series": window_labels[window]}
             for d, v in sma_series.items()
         )
-    left_domain = [indicator_series_name, "7일 이동평균", "30일 이동평균", "90일 이동평균"]
-    left_range = [CHART_INDICATOR_COLOR, CHART_SMA_COLORS[7], CHART_SMA_COLORS[30], CHART_SMA_COLORS[90]]
+    left_domain = [indicator_series_name] + [window_labels[window] for window in ma_windows]
+    left_range = [CHART_INDICATOR_COLOR] + [CHART_SMA_COLORS[window] for window in ma_windows]
 
     combined_domain = left_domain + [copper_series_name]
     combined_range = left_range + [CHART_COPPER_COLOR]
@@ -184,15 +185,17 @@ def render_indicator_chart(indicator_key: str, label: str, as_of_iso: str) -> No
     )
     st.altair_chart(combined_chart, use_container_width=True)
 
+    windows_arrow = "→".join(str(w) for w in ma_windows)
+    windows_dot = "·".join(str(w) for w in ma_windows)
     st.caption(
-        f"🔵 진한 파랑 = {label} 종가, 옅어질수록 7→30→90일 이동평균(왼쪽 축) · "
+        f"🔵 진한 파랑 = {label} 종가, 옅어질수록 {windows_arrow}일 이동평균(왼쪽 축) · "
         "🟤 구리 가격(오른쪽 축, $)"
     )
     st.caption(
-        "🟥 음영 구간 = 해당 지표 기준 매수신호 활성 구간 (7·30·90일 이평선 3개 모두 동시에 "
-        "만족하는 날). 실제 매매 신호의 green_count는 이 조건을 달러인덱스·FXI 두 지표에서 "
-        "합산하므로, 이 지표 하나만으로 3개를 모두 만족하지 못해도 다른 지표 쪽에서 채워져 "
-        "매수가 발생할 수 있습니다."
+        f"🟥 음영 구간 = 해당 지표 기준 매수신호 활성 구간 ({windows_dot}일 이평선 {len(ma_windows)}개 모두 "
+        "동시에 만족하는 날). 실제 매매 신호의 green_count는 이 조건을 달러인덱스·FXI 두 지표에서 "
+        f"합산하므로, 이 지표 하나만으로 {len(ma_windows)}개를 모두 만족하지 못해도 다른 지표 쪽에서 "
+        "채워져 매수가 발생할 수 있습니다."
     )
 
 
