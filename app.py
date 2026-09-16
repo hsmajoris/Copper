@@ -197,21 +197,23 @@ def render_indicator_chart(indicator_key: str, label: str, as_of_iso: str) -> No
 
 
 # 구리 vs DXY / 구리 vs FXI 상관계수 — 2005-01~2026-09, HG=F/DXY/FXI 일간수익률
-# 기준, 2년 단위 11개 구간. COPPER_TRADING_LOGIC.md 11장 참고. Gold의 R² 테이블과
-# 달리 상관계수(r) 자체를 표시함 — 사용자가 원자료(copper_chii_dxy_daily.csv)에서
-# 직접 지정한 검증 기준이 상관계수 범위였기 때문.
+# 기준, 2년 단위 11개 구간. COPPER_TRADING_LOGIC.md 11장 참고. 원자료
+# (copper_chii_dxy_daily.csv)에서 직접 계산한 부호 있는 상관계수(r)를 제곱해
+# R²(0~1)로 표시 — 부호(방향)는 표 대신 본문·캡션에 별도 텍스트로 명시한다
+# (DXY는 전 구간 역상관, FXI는 전 구간 정상관으로 한 번도 바뀌지 않았으므로
+# 구간마다 반복 표기할 필요가 없음).
 _KEY_TAKEAWAYS_PERIODS = [
-    ("2005~2006", -0.148, 0.227),
-    ("2007~2008", -0.379, 0.187),
-    ("2009~2010", -0.362, 0.542),
-    ("2011~2012", -0.480, 0.596),
-    ("2013~2014", -0.154, 0.283),
-    ("2015~2016", -0.145, 0.309),
-    ("2017~2018", -0.220, 0.336),
-    ("2019~2020", -0.242, 0.434),
-    ("2021~2022", -0.415, 0.263),
-    ("2023~2024", -0.388, 0.421),
-    ("2025~2026", -0.225, 0.367),
+    ("2005~2006", 0.0219, 0.0515),
+    ("2007~2008", 0.1436, 0.0350),
+    ("2009~2010", 0.1310, 0.2938),
+    ("2011~2012", 0.2304, 0.3552),
+    ("2013~2014", 0.0237, 0.0801),
+    ("2015~2016", 0.0210, 0.0955),
+    ("2017~2018", 0.0484, 0.1129),
+    ("2019~2020", 0.0586, 0.1884),
+    ("2021~2022", 0.1722, 0.0692),
+    ("2023~2024", 0.1505, 0.1772),
+    ("2025~2026", 0.0506, 0.1347),
 ]
 
 
@@ -229,14 +231,20 @@ border-radius:8px;padding:16px 20px;margin-bottom:4px">
 구리는 금과 달리 안전자산이 아닌 경기민감 산업금속으로, 실질금리(무이자자산 보유의 기회비용)
 같은 금 특유의 통화적 요인은 설명력이 없다고 판단해 이번 모델에서 제외했다. 대신 달러인덱스
 (원자재 표시통화 부담)와 FXI(세계 최대 구리 소비국인 중국의 산업활동에 대한 시장의 실시간
-평가를 담은 가격 기반 대리지표)를 채택했다.
+평가를 담은 가격 기반 대리지표)를 채택했다. PMI(중국 제조업 지수)도 별도로 검증했다 — 이번 달
+발표치가 1개월 전·3개월 전 대비 개선되는지를 신호로 삼아 20년간 확인한 결과, 전체기간 평균으로는
+유의미해 보였으나 5년 단위로 구간을 쪼개보니 2005~2009년 한 시기에서만 유의미했고 나머지 네
+구간(2010~2026)은 유의성이 없었다. 매수 신호와 매도 신호를 직접 비교해도 방향을 구분해주지
+못했다. 반면 FXI는 1년 단위 22개 구간 중 21개에서 견고하게 유의미했다 — 실물 통계인 PMI보다,
+시장가격 기반이지만 매일 갱신되고 선반영 효과가 있는 FXI가 더 신뢰할 수 있는 지표로 확인되어
+FXI를 최종 채택했다.
 </p>
 <p style="margin:0 0 4px 0;font-weight:600">[분석 결과]</p>
 <p style="margin:0 0 10px 0;line-height:1.6">
 2005년 이후 11개 구간(2년 단위)으로 나눠 검토한 결과, 구리-달러인덱스는 전 구간에서 부호가 한
-번도 바뀌지 않고 -0.145~-0.480 사이에서 일관되게 역상관, 구리-FXI 역시 전 구간에서 부호가
-바뀌지 않고 0.187~0.596 사이에서 일관되게 정상관이었다. 두 지표 상호간 상관관계는 -0.18로
-약해 서로 대체 관계가 아닌 독립적인 정보를 담고 있다고 판단했다(OR 결합 채택 근거).
+번도 바뀌지 않고 R²(설명력) 0.021~0.230 사이에서 일관되게 역상관, 구리-FXI 역시 전 구간에서
+부호가 바뀌지 않고 R² 0.035~0.355 사이에서 일관되게 정상관이었다. 두 지표 상호간 상관관계는
+R²=0.032로 약해 서로 대체 관계가 아닌 독립적인 정보를 담고 있다고 판단했다(OR 결합 채택 근거).
 </p>
 <div style="background-color:#fdecea;border-left:4px solid #d32f2f;
 border-radius:6px;padding:10px 14px;line-height:1.6">
@@ -245,7 +253,11 @@ border-radius:6px;padding:10px 14px;line-height:1.6">
 "선행지표"가 아니라 "당일 동시 신호"로 해석해야 한다 — 다만 이 전략은 애초에 신호 당일 종가에
 즉시 체결하는 구조라 이 한계가 설계 자체와 모순되지는 않는다. FXI는 공식 통계(PMI 등)보다
 갱신이 빠른 대신, 중국 경기 자체가 아니라 "시장이 평가한" 값이라는 한 단계 간접적인 대리지표라는
-한계가 있다(COPPER_TRADING_LOGIC.md 10장 참고).
+한계가 있다(COPPER_TRADING_LOGIC.md 10장 참고). 아래 표의 R²가 "유의미한가"는 고정된 숫자
+하나로 판단할 수 없고 표본 크기(구간 길이)에 따라 문턱 자체가 달라진다 — t-검정 기준 대략
+R² ≈ 3.84/(n-2)로, 일간 관측치가 약 250개(1년)면 R²≈0.016, 약 500개(2년)면 R²≈0.008 정도가
+p<0.05 유의성 문턱이다. 아래 11개 구간은 최솟값(DXY 0.021, FXI 0.035)조차 이 문턱을 넉넉히
+넘는다.
 </div>
 </div>
 """,
@@ -261,12 +273,12 @@ border-radius:6px;padding:10px 14px;line-height:1.6">
             )
 
         def r_cell(value: float) -> str:
-            text = f"{value:+.3f}"
-            if abs(value) >= 0.4:
+            text = f"{value:.3f}"
+            if value >= 0.16:
                 text = f"<strong>{text}</strong>"
             return f'<td style="padding:8px 12px;border:1px solid #ddd">{text}</td>'
 
-        header_row = header_cell("구간") + header_cell("구리-달러인덱스 r") + header_cell("구리-FXI r")
+        header_row = header_cell("구간") + header_cell("구리-달러인덱스 R²") + header_cell("구리-FXI R²")
         rows_html = [f"<tr>{header_row}</tr>"]
         for period, dxy_r, fxi_r in _KEY_TAKEAWAYS_PERIODS:
             rows_html.append(f"<tr>{header_cell(period)}{r_cell(dxy_r)}{r_cell(fxi_r)}</tr>")
@@ -276,7 +288,8 @@ border-radius:6px;padding:10px 14px;line-height:1.6">
         st.markdown(table_html, unsafe_allow_html=True)
         st.caption(
             "2년 단위 기준(2005-01~2026-09) · 원자료: yfinance HG=F/DX-Y.NYB/FXI 일간종가 · "
-            "일간수익률(pct_change) 기준 피어슨 상관계수(r) · lag=-5..+5 리드-래그 분석에서 "
+            "일간수익률(pct_change) 기준 피어슨 상관계수(r)를 제곱한 R²(설명력, 0~1) · "
+            "방향(역상관/정상관)은 전 구간 고정이라 본문에 별도 서술 · lag=-5..+5 리드-래그 분석에서 "
             "두 지표 모두 |r| 최댓값이 lag=0에서 나타남을 확인."
         )
 
@@ -375,7 +388,7 @@ def render_dashboard() -> None:
         bg = "background-color: rgba(76,175,80,0.28);" if highlight else ""
         return f'<td style="padding:8px 12px;border:1px solid #ddd;{bg}">{text}</td>'
 
-    def ma_cell(sma: dict, group_border: str = "") -> str:
+    def ma_cell(sma: dict) -> str:
         bg = "background-color: rgba(76,175,80,0.28);" if sma["copper_friendly"] else ""
         badge = (
             f'<div style="font-size:11px;color:#5a5a5a;margin-top:2px">{sma["streak_display"]}</div>'
@@ -383,15 +396,9 @@ def render_dashboard() -> None:
             else ""
         )
         return (
-            f'<td style="padding:8px 12px;border:1px solid #ddd;{group_border}{bg}">'
+            f'<td style="padding:8px 12px;border:1px solid #ddd;{bg}">'
             f'{sma["display"]}{badge}</td>'
         )
-
-    # Both dxy and fxi feed green_count for copper (unlike Gold, where only
-    # real_rate/dxy did out of 4 shown columns) — so the "grouped factor"
-    # outline wraps the entire table here.
-    FACTOR_GROUP_COLS = tuple(config.GREEN_COUNT_SIGNAL_INDICATORS)
-    FACTOR_GROUP_BORDER = "3px solid #333"
 
     rows_html = []
 
@@ -405,21 +412,9 @@ def render_dashboard() -> None:
         rows_html.append(f"<tr>{header_cell(row_name)}{cells}</tr>")
 
     ma_windows = data["ma_windows"]
-    for row_idx, window in enumerate(ma_windows):
-        cells = []
-        for k in indicator_order:
-            border_parts = []
-            if k in FACTOR_GROUP_COLS:
-                if row_idx == 0:
-                    border_parts.append(f"border-top:{FACTOR_GROUP_BORDER};")
-                if row_idx == len(ma_windows) - 1:
-                    border_parts.append(f"border-bottom:{FACTOR_GROUP_BORDER};")
-                if k == FACTOR_GROUP_COLS[0]:
-                    border_parts.append(f"border-left:{FACTOR_GROUP_BORDER};")
-                if k == FACTOR_GROUP_COLS[-1]:
-                    border_parts.append(f"border-right:{FACTOR_GROUP_BORDER};")
-            cells.append(ma_cell(indicators[k]["sma"][str(window)], "".join(border_parts)))
-        rows_html.append(f"<tr>{header_cell(f'{window}일선')}{''.join(cells)}</tr>")
+    for window in ma_windows:
+        cells = "".join(ma_cell(indicators[k]["sma"][str(window)]) for k in indicator_order)
+        rows_html.append(f"<tr>{header_cell(f'{window}일선')}{cells}</tr>")
 
     close_cells = "".join(data_cell(indicators[k]["prev_close"]["display"]) for k in indicator_order)
     rows_html.append(f"<tr>{header_cell(close_row_label)}{close_cells}</tr>")
