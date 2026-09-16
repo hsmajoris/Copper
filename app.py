@@ -1,13 +1,11 @@
-"""Streamlit dashboard: copper price correlation table + weighted
-copper_friendly score.
+"""Streamlit dashboard: copper price correlation table.
 
-For today's date, reads the pre-computed data/latest.json (refreshed daily
-at 07:00 KST by the GitHub Actions workflow in
-.github/workflows/update_dashboard_data.yml) for the daily-frequency
-indicators (DXY/WTI/gold-copper ratio), so the page loads instantly. PMI and
-COMEX are read live from their own local stores on every load (they're
-button-refreshed independently, not part of the daily batch job — see
-copper_dashboard/pmi_store.py / comex_store.py).
+For today's date, reads the pre-computed data/latest.json (refreshed daily at
+07:00 KST by the GitHub Actions workflow in
+.github/workflows/update_dashboard_data.yml) so the page loads instantly.
+For any other selected date, computes the table live as of that date
+(requires network access; no API key needed — both indicators are Yahoo
+Finance tickers, unlike Gold's real_rate which needs FRED_API_KEY).
 """
 
 import json
@@ -18,29 +16,28 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
-from copper_dashboard import build_table, comex_store, config, data_sources, pmi_store, signals, timeseries
+from copper_dashboard import config, signals, timeseries
 from copper_dashboard.timeutil import today_kst
 
 DATA_PATH = Path(__file__).resolve().parent / "data" / "latest.json"
 EARLIEST_DATE = date(2000, 1, 1)
 
 # dataviz reference palette: the indicator gets a sequential blue ramp (darkest =
-# its own daily close, progressively lighter for the 5/30/60-day SMAs), copper
-# price gets a distinct copper/bronze tone on its own (right-hand) axis so it
-# never reads as "one more shade of the indicator family", and reference
-# threshold lines use a neutral gray.
+# its own daily close, progressively lighter for the 7/30/90-calendar-day SMAs
+# so shorter windows read closer to the raw series), copper price gets
+# categorical slot 2 (bronze/copper tone) so it never reads as "one more shade
+# of the same family" on its own (right-hand) axis.
 CHART_INDICATOR_COLOR = "#256abf"
-CHART_SMA_COLORS = {5: "#5598e7", 30: "#86b6ef", 60: "#b7d3f6"}
+CHART_SMA_COLORS = {7: "#5598e7", 30: "#86b6ef", 90: "#b7d3f6"}
 CHART_COPPER_COLOR = "#b5651d"
-CHART_THRESHOLD_COLOR = "#8a8a86"
 CHART_SIGNAL_SHADE_COLOR = "#e34948"
 CHART_SIGNAL_SHADE_OPACITY = 0.16
-# Fixed, not user-configurable here — deliberately independent of the 유효성
-# 검증 (backtest) page's own adjustable analysis period.
 CHART_YEARS = 10
 
 
 def _boolean_series_to_ranges(flag: pd.Series) -> list[tuple]:
+    """Contiguous [start, end] date ranges where `flag` is True (inclusive of
+    both ends)."""
     if flag.empty:
         return []
     idx = flag.index
@@ -59,12 +56,14 @@ def _boolean_series_to_ranges(flag: pd.Series) -> list[tuple]:
 
 
 @st.cache_data(ttl=3600, show_spinner="데이터를 불러오는 중입니다...")
-def load_daily_data(selected_date_iso: str, is_today: bool):
+def load_data(selected_date_iso: str, is_today: bool):
     if is_today and DATA_PATH.exists():
         return json.loads(DATA_PATH.read_text(encoding="utf-8"))
 
+    from copper_dashboard.build_table import build
+
     as_of = None if is_today else date.fromisoformat(selected_date_iso)
-    return build_table.build(as_of=as_of)
+    return build(as_of=as_of)
 
 
 @st.cache_data(ttl=86400, show_spinner=f"{CHART_YEARS}년치 시계열 데이터를 불러오는 중입니다...")
@@ -90,19 +89,15 @@ def render_indicator_chart(indicator_key: str, label: str, as_of_iso: str) -> No
         {"date": d, "value": v, "series": indicator_series_name}
         for d, v in chart_data["indicator"].items()
     ]
-    if chart_data["kind"] == "ma":
-        window_labels = {5: "5일 이동평균", 30: "30일 이동평균", 60: "60일 이동평균"}
-        for window in (5, 30, 60):
-            sma_series = chart_data["smas"][window]
-            left_rows.extend(
-                {"date": d, "value": v, "series": window_labels[window]}
-                for d, v in sma_series.items()
-            )
-        left_domain = [indicator_series_name, "5일 이동평균", "30일 이동평균", "60일 이동평균"]
-        left_range = [CHART_INDICATOR_COLOR, CHART_SMA_COLORS[5], CHART_SMA_COLORS[30], CHART_SMA_COLORS[60]]
-    else:
-        left_domain = [indicator_series_name]
-        left_range = [CHART_INDICATOR_COLOR]
+    window_labels = {7: "7일 이동평균", 30: "30일 이동평균", 90: "90일 이동평균"}
+    for window in (7, 30, 90):
+        sma_series = chart_data["smas"][window]
+        left_rows.extend(
+            {"date": d, "value": v, "series": window_labels[window]}
+            for d, v in sma_series.items()
+        )
+    left_domain = [indicator_series_name, "7일 이동평균", "30일 이동평균", "90일 이동평균"]
+    left_range = [CHART_INDICATOR_COLOR, CHART_SMA_COLORS[7], CHART_SMA_COLORS[30], CHART_SMA_COLORS[90]]
 
     combined_domain = left_domain + [copper_series_name]
     combined_range = left_range + [CHART_COPPER_COLOR]
@@ -133,18 +128,18 @@ def render_indicator_chart(indicator_key: str, label: str, as_of_iso: str) -> No
         )
     )
 
-    if chart_data["kind"] == "ma":
-        signal_flag = signals.all_windows_copper_friendly_for(
+    # Buy-signal-active shading: both dxy and fxi feed green_count (unlike
+    # Gold, this project has no reference-only indicator), so both always
+    # get shading here.
+    signal_flag = (
+        signals.all_windows_copper_friendly_for(
             indicator_key, chart_data["indicator"], chart_data["smas"]
         )
-    elif "percentile" in chart_data:  # v2: rolling-percentile ratio
-        signal_flag = (chart_data["percentile"] <= config.GC_RATIO_PERCENTILE_BUY).fillna(False)
-    else:  # legacy (v1): absolute threshold
-        signal_flag = signals.ratio_threshold_active(
-            chart_data["indicator"], config.DEFAULT_GC_RATIO_BUY_THRESHOLD, "le"
-        )
+        if indicator_key in config.GREEN_COUNT_SIGNAL_INDICATORS
+        else None
+    )
 
-    shade_ranges = _boolean_series_to_ranges(signal_flag)
+    shade_ranges = _boolean_series_to_ranges(signal_flag) if signal_flag is not None else []
     layers = []
     if shade_ranges:
         shade_df = pd.DataFrame(
@@ -160,25 +155,6 @@ def render_indicator_chart(indicator_key: str, label: str, as_of_iso: str) -> No
         )
 
     layers.append(left_chart)
-    if chart_data["kind"] == "ratio" and "percentile" not in chart_data:
-        # Legacy (v1) absolute-threshold mode only — a fixed horizontal line
-        # doesn't mean anything for the v2 rolling-percentile mode, since
-        # "high/low" there is relative to a moving 2-year window, not a
-        # fixed ratio level.
-        threshold_df = pd.DataFrame(
-            {
-                "y": [config.DEFAULT_GC_RATIO_BUY_THRESHOLD, config.DEFAULT_GC_RATIO_SELL_THRESHOLD],
-                "label": [
-                    f"매수 우호적 임계값 {config.DEFAULT_GC_RATIO_BUY_THRESHOLD:g}",
-                    f"매수 비우호적 임계값 {config.DEFAULT_GC_RATIO_SELL_THRESHOLD:g}",
-                ],
-            }
-        )
-        layers.append(
-            alt.Chart(threshold_df)
-            .mark_rule(strokeDash=[4, 4], strokeWidth=1.5, color=CHART_THRESHOLD_COLOR)
-            .encode(y="y:Q", tooltip=[alt.Tooltip("label:N", title="기준선")])
-        )
 
     copper_df = pd.DataFrame(
         {"date": d, "value": v, "series": copper_series_name} for d, v in chart_data["copper"].items()
@@ -208,64 +184,183 @@ def render_indicator_chart(indicator_key: str, label: str, as_of_iso: str) -> No
     )
     st.altair_chart(combined_chart, use_container_width=True)
 
-    if chart_data["kind"] == "ratio" and "percentile" in chart_data:
-        st.caption(f"🔵 {label}(왼쪽 축) · 🟤 구리 가격(오른쪽 축, $)")
-        st.caption(
-            f"🟥 음영 구간 = 비율이 자신의 최근 {config.GC_RATIO_ROLLING_WINDOW}거래일(~2년) 대비 하위 "
-            f"{config.GC_RATIO_PERCENTILE_BUY:g}% 이내로 낮은 날 (구리에 우호적인 국면 — v2 롤링 백분위 "
-            "방식. 고정 임계값이 아니라 최근 히스토리 대비 상대적 위치이므로, 값 자체가 시간에 따라 "
-            "레벨업/레벨다운해도 자동으로 재보정됩니다.)"
+    st.caption(
+        f"🔵 진한 파랑 = {label} 종가, 옅어질수록 7→30→90일 이동평균(왼쪽 축) · "
+        "🟤 구리 가격(오른쪽 축, $)"
+    )
+    st.caption(
+        "🟥 음영 구간 = 해당 지표 기준 매수신호 활성 구간 (7·30·90일 이평선 3개 모두 동시에 "
+        "만족하는 날). 실제 매매 신호의 green_count는 이 조건을 달러인덱스·FXI 두 지표에서 "
+        "합산하므로, 이 지표 하나만으로 3개를 모두 만족하지 못해도 다른 지표 쪽에서 채워져 "
+        "매수가 발생할 수 있습니다."
+    )
+
+
+# 구리 vs DXY / 구리 vs FXI 상관계수 — 2005-01~2026-09, HG=F/DXY/FXI 일간수익률
+# 기준, 2년 단위 11개 구간. COPPER_TRADING_LOGIC.md 11장 참고. Gold의 R² 테이블과
+# 달리 상관계수(r) 자체를 표시함 — 사용자가 원자료(copper_chii_dxy_daily.csv)에서
+# 직접 지정한 검증 기준이 상관계수 범위였기 때문.
+_KEY_TAKEAWAYS_PERIODS = [
+    ("2005~2006", -0.148, 0.227),
+    ("2007~2008", -0.379, 0.187),
+    ("2009~2010", -0.362, 0.542),
+    ("2011~2012", -0.480, 0.596),
+    ("2013~2014", -0.154, 0.283),
+    ("2015~2016", -0.145, 0.309),
+    ("2017~2018", -0.220, 0.336),
+    ("2019~2020", -0.242, 0.434),
+    ("2021~2022", -0.415, 0.263),
+    ("2023~2024", -0.388, 0.421),
+    ("2025~2026", -0.225, 0.367),
+]
+
+
+def _render_key_takeaways() -> None:
+    """"핵심 요약" callout pinned above the correlation table. 금 프로젝트와 달리
+    국면별 참여율 문구는 없음 — regime.py를 이번 1차 범위에서 제외했기 때문(요청에
+    따름). 대신 11개 구간 상관계수 검증(11장) 결과를 고정 텍스트로 보여준다."""
+    st.markdown(
+        """
+<div style="background-color:#fff3e0;border-left:6px solid #b5651d;
+border-radius:8px;padding:16px 20px;margin-bottom:4px">
+<div style="font-size:17px;font-weight:600;margin-bottom:8px">💡 핵심 요약</div>
+<p style="margin:0 0 4px 0;font-weight:600">[분석 개요]</p>
+<p style="margin:0 0 10px 0;line-height:1.6">
+구리는 금과 달리 안전자산이 아닌 경기민감 산업금속으로, 실질금리(무이자자산 보유의 기회비용)
+같은 금 특유의 통화적 요인은 설명력이 없다고 판단해 이번 모델에서 제외했다. 대신 달러인덱스
+(원자재 표시통화 부담)와 FXI(세계 최대 구리 소비국인 중국의 산업활동에 대한 시장의 실시간
+평가를 담은 가격 기반 대리지표)를 채택했다.
+</p>
+<p style="margin:0 0 4px 0;font-weight:600">[분석 결과]</p>
+<p style="margin:0 0 10px 0;line-height:1.6">
+2005년 이후 11개 구간(2년 단위)으로 나눠 검토한 결과, 구리-달러인덱스는 전 구간에서 부호가 한
+번도 바뀌지 않고 -0.145~-0.480 사이에서 일관되게 역상관, 구리-FXI 역시 전 구간에서 부호가
+바뀌지 않고 0.187~0.596 사이에서 일관되게 정상관이었다. 두 지표 상호간 상관관계는 -0.18로
+약해 서로 대체 관계가 아닌 독립적인 정보를 담고 있다고 판단했다(OR 결합 채택 근거).
+</p>
+<div style="background-color:#fdecea;border-left:4px solid #d32f2f;
+border-radius:6px;padding:10px 14px;line-height:1.6">
+<span style="font-weight:600">[유의사항]</span><br>
+리드-래그 분석 결과 두 지표 모두 상관관계가 거의 전부 lag=0(당일)에 몰려 있어, 이 지표들은
+"선행지표"가 아니라 "당일 동시 신호"로 해석해야 한다 — 다만 이 전략은 애초에 신호 당일 종가에
+즉시 체결하는 구조라 이 한계가 설계 자체와 모순되지는 않는다. FXI는 공식 통계(PMI 등)보다
+갱신이 빠른 대신, 중국 경기 자체가 아니라 "시장이 평가한" 값이라는 한 단계 간접적인 대리지표라는
+한계가 있다(COPPER_TRADING_LOGIC.md 10장 참고).
+</div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+    with st.expander("📊 구간별 상관성 근거 보기", expanded=False):
+
+        def header_cell(text: str) -> str:
+            return (
+                f'<th style="padding:8px 12px;border:1px solid #ddd;background:#f5f5f5;'
+                f'text-align:left;white-space:nowrap">{text}</th>'
+            )
+
+        def r_cell(value: float) -> str:
+            text = f"{value:+.3f}"
+            if abs(value) >= 0.4:
+                text = f"<strong>{text}</strong>"
+            return f'<td style="padding:8px 12px;border:1px solid #ddd">{text}</td>'
+
+        header_row = header_cell("구간") + header_cell("구리-달러인덱스 r") + header_cell("구리-FXI r")
+        rows_html = [f"<tr>{header_row}</tr>"]
+        for period, dxy_r, fxi_r in _KEY_TAKEAWAYS_PERIODS:
+            rows_html.append(f"<tr>{header_cell(period)}{r_cell(dxy_r)}{r_cell(fxi_r)}</tr>")
+        table_html = (
+            '<table style="border-collapse:collapse;width:100%;font-size:14px">' + "".join(rows_html) + "</table>"
         )
-    elif chart_data["kind"] == "ratio":
+        st.markdown(table_html, unsafe_allow_html=True)
         st.caption(
-            f"🔵 {label}(왼쪽 축) · 🟤 구리 가격(오른쪽 축, $) · 회색 점선 = 매수 우호적/비우호적 임계값 "
-            f"({config.DEFAULT_GC_RATIO_BUY_THRESHOLD:g} / {config.DEFAULT_GC_RATIO_SELL_THRESHOLD:g})"
+            "2년 단위 기준(2005-01~2026-09) · 원자료: yfinance HG=F/DX-Y.NYB/FXI 일간종가 · "
+            "일간수익률(pct_change) 기준 피어슨 상관계수(r) · lag=-5..+5 리드-래그 분석에서 "
+            "두 지표 모두 |r| 최댓값이 lag=0에서 나타남을 확인."
+        )
+
+
+def render_dashboard() -> None:
+    st.title("구리(Copper) 상관관계 대시보드")
+    _render_key_takeaways()
+
+    # Shared with the 유효성 검증 (backtest) page via config.COPPER_PRICE_BASIS_STATE_KEY
+    # — but NOT via that key's own widget binding: st.navigation resets a
+    # widget's session_state entry back to its default the moment that exact
+    # widget isn't instantiated in a run, so a `key=` shared across two
+    # different pages' widgets does NOT survive navigation between them. The
+    # fix is to keep the shared choice in that plain session_state entry
+    # (which does survive navigation) and seed each page's own, page-local
+    # widget from it via `index=`, writing the widget's result straight back
+    # after every rerun.
+    _copper_basis_options = [config.COPPER_PRICE_BASIS_INTL, config.COPPER_PRICE_BASIS_KRX]
+    st.session_state.setdefault(config.COPPER_PRICE_BASIS_STATE_KEY, config.COPPER_PRICE_BASIS_DEFAULT)
+    copper_price_basis = st.radio(
+        "구리 가격 기준",
+        options=_copper_basis_options,
+        format_func=lambda v: config.COPPER_PRICE_BASIS_LABELS[v],
+        index=_copper_basis_options.index(st.session_state[config.COPPER_PRICE_BASIS_STATE_KEY]),
+        key="_copper_price_basis_widget_dashboard",
+        horizontal=True,
+        help="유효성 검증(백테스트) 페이지 전체가 이 기준으로 계산됩니다. 이 대시보드 페이지의 "
+        "표·그래프 자체는 이 설정과 무관하게 항상 국제 시세 기준입니다.",
+    )
+    st.session_state[config.COPPER_PRICE_BASIS_STATE_KEY] = copper_price_basis
+    if copper_price_basis == config.COPPER_PRICE_BASIS_KRX:
+        st.caption(
+            "ℹ️ 아래 표의 달러인덱스·FXI는 국제 시세 기준 참고 지표이며 KODEX 구리선물(H)과 직접 "
+            "대응되지 않습니다. 이 설정은 유효성 검증 페이지의 백테스트에만 적용됩니다."
+        )
+
+    today = today_kst()
+    date_col, refresh_col = st.columns([4, 1])
+    with date_col:
+        selected_date = st.date_input(
+            "기준일 선택",
+            value=today,
+            min_value=EARLIEST_DATE,
+            max_value=today,
+            help="이 날짜(또는 그 이전 최근 거래일)의 종가를 기준으로 표를 계산합니다.",
+        )
+    with refresh_col:
+        st.write("")
+        st.write("")
+        force_live = st.button("새로고침", use_container_width=True)
+
+    is_today = selected_date == today
+    if force_live:
+        st.cache_data.clear()
+
+    try:
+        data = load_data(selected_date.isoformat(), is_today)
+    except Exception as exc:
+        st.error(f"데이터를 불러오지 못했습니다: {exc}")
+        st.stop()
+
+    close_row_label = "전일종가" if is_today else "종가"
+
+    if is_today:
+        st.caption(
+            f"기준일(전일 미국장 마감 종가): **{data['as_of']}**  ·  생성시각(KST): {data['generated_at']}"
         )
         st.caption(
-            f"🟥 음영 구간 = 비율 ≤ {config.DEFAULT_GC_RATIO_BUY_THRESHOLD:g} (구리에 우호적인 국면)"
+            "⚠️ 실시간 시세가 아닙니다. 이 표는 매일 아침 7시(KST)에 자동 갱신됩니다."
         )
     else:
         st.caption(
-            f"🔵 진한 파랑 = {label} 종가, 옅어질수록 5→30→60일 이동평균(왼쪽 축) · "
-            "🟤 구리 가격(오른쪽 축, $)"
+            f"선택한 기준일: **{selected_date}** → 실제 반영된 거래일: **{data['as_of']}** "
+            "(주말·휴장일이면 직전 거래일 종가가 표시됩니다)"
         )
-        st.caption(
-            "🟥 음영 구간 = 5·30·60일 이평선 3개 모두 동시에 구리에 우호적인 방향을 가리키는 날"
-        )
+        st.caption("ℹ️ 과거 기준일은 매일 자동 갱신되는 캐시가 아니라 그때그때 실시간으로 계산됩니다.")
+    st.caption(
+        "🟢 옅은 녹색 배경 = 그 신호가 현재 구리값에 우호적인 방향인 셀입니다. 역방향 지표"
+        "(달러인덱스)는 종가가 이평선 아래일 때, 정방향 지표(FXI)는 종가가 이평선 위일 때 "
+        "초록색으로 표시됩니다(green_count에 사용). 셀에 보이는 '상향 돌파/이평선 아래' 문구는 "
+        "하이라이트 색과 무관한, 종가와 이평선의 기술적 위치입니다. 각 셀 하단의 작은 글씨는 그 "
+        "상향 돌파가 며칠째 지속 중인지를 나타내는 보조 정보입니다."
+    )
 
-
-def render_score(score_info: dict) -> None:
-    score = score_info["score"]
-    st.subheader("종합 점수 (copper_friendly)")
-    if score is None:
-        st.warning("모든 지표가 제외되어 점수를 계산할 수 없습니다.")
-        return
-
-    if score >= config.SCORE_BUY_FRIENDLY_CUTOFF:
-        badge, color = "매수 우호적", "🟢"
-    elif score <= config.SCORE_SELL_UNFRIENDLY_CUTOFF:
-        badge, color = "매수 비우호적", "🔴"
-    else:
-        badge, color = "중립", "🟡"
-
-    col1, col2 = st.columns([1, 2])
-    with col1:
-        st.metric("종합 점수 (0~100)", f"{score:.1f}", delta=f"{color} {badge}", delta_color="off")
-    with col2:
-        st.progress(min(max(score / 100.0, 0.0), 1.0))
-        st.caption(
-            f"기준: {config.SCORE_BUY_FRIENDLY_CUTOFF:g} 이상 매수 우호적 · "
-            f"{config.SCORE_SELL_UNFRIENDLY_CUTOFF:g} 이하 매수 비우호적 (초기 설정값 — "
-            "유효성 검증 페이지에서 과거 분포를 보고 조정 가능)"
-        )
-    if score_info["excluded"]:
-        excluded_labels = ", ".join(
-            config.INDICATOR_META.get(k, {}).get("label", k) for k in score_info["excluded"]
-        )
-        st.caption(f"⚠️ 데이터 오래됨/누락으로 점수 계산에서 제외된 지표: {excluded_labels}")
-
-
-def render_daily_table(data: dict) -> None:
     indicator_order = data["indicator_order"]
     indicators = data["indicators"]
 
@@ -280,36 +375,54 @@ def render_daily_table(data: dict) -> None:
         bg = "background-color: rgba(76,175,80,0.28);" if highlight else ""
         return f'<td style="padding:8px 12px;border:1px solid #ddd;{bg}">{text}</td>'
 
-    def ma_cell(sma: dict) -> str:
+    def ma_cell(sma: dict, group_border: str = "") -> str:
         bg = "background-color: rgba(76,175,80,0.28);" if sma["copper_friendly"] else ""
         badge = (
             f'<div style="font-size:11px;color:#5a5a5a;margin-top:2px">{sma["streak_display"]}</div>'
             if sma["streak_display"]
             else ""
         )
-        return f'<td style="padding:8px 12px;border:1px solid #ddd;{bg}">{sma["display"]}{badge}</td>'
+        return (
+            f'<td style="padding:8px 12px;border:1px solid #ddd;{group_border}{bg}">'
+            f'{sma["display"]}{badge}</td>'
+        )
+
+    # Both dxy and fxi feed green_count for copper (unlike Gold, where only
+    # real_rate/dxy did out of 4 shown columns) — so the "grouped factor"
+    # outline wraps the entire table here.
+    FACTOR_GROUP_COLS = tuple(config.GREEN_COUNT_SIGNAL_INDICATORS)
+    FACTOR_GROUP_BORDER = "3px solid #333"
 
     rows_html = []
-    weight_row = "".join(
-        header_cell(f"가중치 {indicators[k]['weight']:g}") for k in indicator_order
-    )
-    rows_html.append(f"<tr>{header_cell('구성')}{weight_row}</tr>")
 
-    header_row = "".join(
+    header_row = header_cell("구성") + "".join(
         header_cell(indicators[k]["label"], tooltip=indicators[k]["source"]) for k in indicator_order
     )
-    rows_html.append(f"<tr>{header_cell('지표')}{header_row}</tr>")
+    rows_html.append(f"<tr>{header_row}</tr>")
 
     for row_name in data["row_order"]:
         cells = "".join(data_cell(data["static_rows"][row_name][k]) for k in indicator_order)
         rows_html.append(f"<tr>{header_cell(row_name)}{cells}</tr>")
 
-    for window in data["ma_windows"]:
-        cells = "".join(ma_cell(indicators[k]["sma"][str(window)]) for k in indicator_order)
-        rows_html.append(f"<tr>{header_cell(f'{window}일선')}{cells}</tr>")
+    ma_windows = data["ma_windows"]
+    for row_idx, window in enumerate(ma_windows):
+        cells = []
+        for k in indicator_order:
+            border_parts = []
+            if k in FACTOR_GROUP_COLS:
+                if row_idx == 0:
+                    border_parts.append(f"border-top:{FACTOR_GROUP_BORDER};")
+                if row_idx == len(ma_windows) - 1:
+                    border_parts.append(f"border-bottom:{FACTOR_GROUP_BORDER};")
+                if k == FACTOR_GROUP_COLS[0]:
+                    border_parts.append(f"border-left:{FACTOR_GROUP_BORDER};")
+                if k == FACTOR_GROUP_COLS[-1]:
+                    border_parts.append(f"border-right:{FACTOR_GROUP_BORDER};")
+            cells.append(ma_cell(indicators[k]["sma"][str(window)], "".join(border_parts)))
+        rows_html.append(f"<tr>{header_cell(f'{window}일선')}{''.join(cells)}</tr>")
 
     close_cells = "".join(data_cell(indicators[k]["prev_close"]["display"]) for k in indicator_order)
-    rows_html.append(f"<tr>{header_cell('전일종가')}{close_cells}</tr>")
+    rows_html.append(f"<tr>{header_cell(close_row_label)}{close_cells}</tr>")
 
     table_html = (
         '<table style="border-collapse:collapse;width:100%;font-size:14px">'
@@ -318,219 +431,12 @@ def render_daily_table(data: dict) -> None:
     )
     st.markdown(table_html, unsafe_allow_html=True)
 
-
-def _pmi_refresh_and_save(indicator_key: str, label: str) -> None:
-    scrape_fn = data_sources.scrape_china_pmi if indicator_key == "china_pmi" else data_sources.scrape_us_pmi
-    period_key = f"pmi_period_{indicator_key}"
-    value_key = f"pmi_value_{indicator_key}"
-    scraped_key = f"pmi_scraped_{indicator_key}"
-
-    today = today_kst()
-    default_period = (today.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
-    st.session_state.setdefault(period_key, default_period)
-    st.session_state.setdefault(value_key, 50.0)
-    st.session_state.setdefault(scraped_key, False)
-
-    if st.button(f"🔄 {label} 새로고침 (월초)", key=f"btn_refresh_{indicator_key}"):
-        result = scrape_fn()
-        if result is not None:
-            # Set BEFORE the number_input widget below is instantiated this
-            # run, so it picks the new value up via its `key=` binding — do
-            # NOT also pass `value=` to the widget (Streamlit warns that
-            # combination is a conflicting anti-pattern), and never write
-            # None here: a failed scrape should leave whatever value was
-            # already in the box, not blank the widget out entirely.
-            st.session_state[value_key] = result["value"]
-            st.session_state[scraped_key] = True
-            st.success(f"자동 스크래핑 성공: {result['value']:.1f} — 아래에서 확인 후 저장하세요.")
-        else:
-            st.session_state[scraped_key] = False
-            st.info("자동 스크래핑에 실패했습니다. 값을 직접 입력한 뒤 저장해 주세요.")
-
-    period = st.text_input(
-        "해당 월 (YYYY-MM)", key=period_key, help="이 PMI 수치가 어느 달의 값인지 입력하세요."
-    )
-    value = st.number_input(
-        "값",
-        min_value=0.0,
-        max_value=100.0,
-        step=0.1,
-        format="%.1f",
-        key=value_key,
-    )
-    if st.button(f"💾 {label} 저장", key=f"btn_save_{indicator_key}"):
-        source = "scraped" if st.session_state.get(f"pmi_scraped_{indicator_key}") else "manual"
-        pmi_store.save_pmi_value(indicator_key, period, float(value), source=source)
-        st.cache_data.clear()
-        st.success(f"{label} {period} = {value:.1f} 저장 완료")
-        st.rerun()
-
-
-def render_pmi_card(indicator_key: str, monthly_data: dict) -> None:
-    label = monthly_data["label"]
-    with st.container(border=True):
-        st.markdown(f"#### {label}")
-        st.caption(f"가중치 {monthly_data['weight']:g} · {config.INDICATOR_META[indicator_key]['source']}")
-        if monthly_data.get("has_data"):
-            badge = "🟢 우호적" if monthly_data["favorable"] else "🔴 비우호적"
-            stale_badge = " · ⚠️ 데이터 오래됨(점수 제외)" if monthly_data["stale"] else ""
-            st.metric(f"{label} ({monthly_data['period']})", monthly_data["value_display"], delta=badge, delta_color="off")
-            st.caption(
-                f"최종 갱신일: {monthly_data['recorded_at']} · {monthly_data['days_since_recorded']}일 전{stale_badge}"
-            )
-            if monthly_data["streak_display"]:
-                st.caption(f"📈 {monthly_data['streak_display']}")
-        else:
-            st.info("아직 저장된 값이 없습니다. 아래에서 새로고침하거나 직접 입력해 저장하세요.")
-        _pmi_refresh_and_save(indicator_key, label)
-
-
-def render_copper_trend_card(copper_trend: dict | None) -> None:
-    if copper_trend is None:
-        st.info(
-            "🛡️ 구리 자체 추세(200일선) 카드는 다음 일일 배치 갱신(매일 07:00 KST) 이후 표시됩니다 "
-            "— v2에서 새로 추가된 지표라 기존 data/latest.json에는 아직 없습니다."
-        )
-        return
-    with st.container(border=True):
-        st.markdown(f"#### 🛡️ {copper_trend['label']} (v2 신규 — 안전장치 지표, 가중치 {copper_trend['weight']:g})")
-        badge = "🟢 우호적" if copper_trend["above_sma"] else "🔴 비우호적"
-        st.metric(
-            f"구리(HG=F) 종가 (기준일 {copper_trend['as_of']})",
-            copper_trend["close_display"],
-            delta=f"{badge} · {copper_trend['status_text']}",
-            delta_color="off",
-        )
-        st.caption(f"{config.COPPER_TREND_SMA_WINDOW}일 이동평균: {copper_trend['sma_display']}")
-        st.caption(config.FOOTNOTES["copper_trend"])
-
-
-def render_comex_card(comex: dict) -> None:
-    with st.container(border=True):
-        st.markdown(f"#### {comex['label']} (실시간 카드 — 점수/백테스트 미반영)")
-        if comex["has_data"]:
-            st.metric(f"최근 보고일: {comex['date']}", comex["tons_display"])
-            st.caption(
-                f"자동 수집 시작일: {comex['first_collection_date']} "
-                f"({comex['days_of_history']}일치 축적됨 — 1년 이상 쌓이면 백테스트 포함 검토)"
-            )
-        else:
-            st.info("아직 저장된 값이 없습니다.")
-        st.caption(config.FOOTNOTES["comex_copper_stock"])
-
-        stock_date = st.date_input("보고일", value=today_kst(), key="comex_date_input")
-        tons = st.number_input("재고량 (톤)", min_value=0.0, step=1.0, key="comex_tons_input")
-        if st.button("💾 COMEX 재고 저장", key="btn_save_comex"):
-            comex_store.save_comex_value(stock_date, float(tons))
-            st.cache_data.clear()
-            st.success(f"{stock_date} = {tons:,.0f}톤 저장 완료")
-            st.rerun()
-        st.caption(
-            "ℹ️ CME의 delivery_reports 엔드포인트는 자동 스크래핑이 이용약관상 명시적으로 금지되어 "
-            "있어(요청 시 403과 함께 금지 문구 반환), 자동 수집 대신 수기 입력으로 운영합니다."
-        )
-
-
-def render_dashboard() -> None:
-    st.title("구리(Copper) 상관관계 대시보드")
-
-    today = today_kst()
-    date_col, refresh_col = st.columns([4, 1])
-    with date_col:
-        selected_date = st.date_input(
-            "기준일 선택 (일별 지표: 달러인덱스·WTI·금/구리비율)",
-            value=today,
-            min_value=EARLIEST_DATE,
-            max_value=today,
-            help="이 날짜(또는 그 이전 최근 거래일)의 종가를 기준으로 일별 지표를 계산합니다. "
-            "PMI·COMEX는 이 날짜와 무관하게 항상 최근 저장값을 표시합니다.",
-        )
-    with refresh_col:
-        st.write("")
-        st.write("")
-        force_live = st.button("새로고침", use_container_width=True)
-
-    is_today = selected_date == today
-    if force_live:
-        st.cache_data.clear()
-
-    try:
-        data = load_daily_data(selected_date.isoformat(), is_today)
-    except Exception as exc:
-        st.error(f"데이터를 불러오지 못했습니다: {exc}")
-        st.stop()
-
-    # PMI/COMEX are recomputed fresh on every render (cheap local CSV reads,
-    # no network) rather than read out of `data` — `data` is the cached
-    # daily-batch JSON snapshot for "today" (data/latest.json, refreshed only
-    # once a day), so a PMI value the user just saved through the UI below
-    # would otherwise stay invisible until tomorrow's 07:00 KST batch run.
-    # Always evaluated as of real "today", independent of the SMA table's
-    # own as-of date selector above (PMI/COMEX are a separate, always-latest
-    # view — see the date_input's help text).
-    monthly_indicators = {
-        key: build_table.build_monthly_indicator(key) for key in config.MONTHLY_INDICATOR_ORDER
-    }
-    comex = build_table.build_comex_card()
-    # copper_trend (v2's own-price safety-net indicator) IS part of the
-    # cached daily-batch payload (`data`, refreshed once a day) since it's a
-    # daily-frequency series like DXY/WTI, not a button-refreshed one like
-    # PMI/COMEX — see build_table.build(). `.get(...)` guards against a
-    # data/latest.json written by the pre-v2 batch job (before this key
-    # existed) that hasn't been regenerated yet — the score just excludes it
-    # until the next daily batch run picks up the new schema.
-    copper_trend = data.get("copper_trend")
-    score_directions = {key: data["indicators"][key]["score_direction"] for key in config.INDICATOR_ORDER}
-    score_directions["copper_trend"] = copper_trend.get("score_direction") if copper_trend else None
-    score_directions.update(
-        {key: monthly_indicators[key].get("score_direction") for key in config.MONTHLY_INDICATOR_ORDER}
-    )
-    score = signals.compute_copper_friendly_score(score_directions)
-
-    if is_today:
-        st.caption(
-            f"기준일(전일 마감 종가): **{data['as_of']}**  ·  생성시각(KST): {data['generated_at']}"
-        )
-    else:
-        st.caption(
-            f"선택한 기준일: **{selected_date}** → 실제 반영된 거래일: **{data['as_of']}** "
-            "(주말·휴장일이면 직전 거래일 종가가 표시됩니다)"
-        )
-    st.caption(
-        "⚠️ 실시간 시세가 아닙니다. 일별 지표는 매일 아침 7시(KST)에 자동 갱신되며, PMI·COMEX는 "
-        "버튼을 눌러 수동으로 갱신합니다. 구리는 안전자산이 아닌 경기민감 산업금속이므로, 아래 "
-        "지표 구성은 금(Gold) 대시보드의 VIX·실질금리 같은 안전자산 심리지표 대신 PMI 중심의 "
-        "경기지표로 구성되어 있습니다."
-    )
-
-    render_score(score)
-    render_copper_trend_card(copper_trend)
-
-    st.markdown("#### 일별 지표 (자동 갱신)")
-    st.caption(
-        "🟢 옅은 녹색 배경 = 그 신호가 현재 구리값에 우호적인 방향인 셀입니다. 정방향 지표(WTI)는 "
-        "종가가 이평선 위일 때, 역방향 지표(달러인덱스·금/구리비율)는 종가가 이평선 아래일 때 "
-        "초록색으로 표시됩니다."
-    )
-    render_daily_table(data)
-
-    st.markdown("#### PMI 지표 (반자동 갱신 — 월초 버튼 클릭 권장)")
-    pmi_col1, pmi_col2 = st.columns(2)
-    with pmi_col1:
-        render_pmi_card("china_pmi", monthly_indicators["china_pmi"])
-    with pmi_col2:
-        render_pmi_card("us_pmi", monthly_indicators["us_pmi"])
-
-    st.markdown("#### COMEX 재고 (실시간, 점수 미반영)")
-    render_comex_card(comex)
-
     st.markdown("#### 지표별 시계열 그래프")
     st.caption(
         f"버튼을 누른 지표만 그 시점에 최근 {CHART_YEARS}년치 데이터를 받아와 그립니다 — 누르기 "
         "전에는 어떤 지표도 미리 계산하지 않습니다."
     )
-    indicator_order = data["indicator_order"]
-    indicators = data["indicators"]
+
     chart_cols = st.columns(len(indicator_order))
     for col, key in zip(chart_cols, indicator_order):
         state_key = f"show_chart_{key}"
@@ -549,12 +455,9 @@ def render_dashboard() -> None:
         if st.session_state.get(f"show_chart_{key}", False):
             render_indicator_chart(key, indicators[key]["label"], today.isoformat())
 
-    st.markdown("#### 지표별 참고 출처 및 한계")
+    st.markdown("#### 지표별 참고 출처")
     for k in indicator_order:
         st.caption(f"**{indicators[k]['label']}** — {data['footnotes'][k]}")
-    for k in config.MONTHLY_INDICATOR_ORDER:
-        st.caption(f"**{config.INDICATOR_META[k]['label']}** — {data['footnotes'][k]}")
-    st.caption(f"**종합 한계** — {data['footnotes']['overall_limitation']}")
 
 
 def main() -> None:

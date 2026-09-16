@@ -1,26 +1,16 @@
-"""Fetches raw daily price series (Yahoo Finance via yfinance) and attempts
-best-effort scraping of the two monthly PMI headline numbers.
+"""Fetches raw daily price series from free data sources (Yahoo Finance via
+yfinance, and Naver's stock-price API for KODEX 구리선물(H), 138910).
 
-Design note on the PMI scrapers: every public source we found (see
-README.md "PMI 스크래핑 소스") is a page whose HTML structure is NOT a
-stable, versioned API — it can change without notice. So
-`scrape_china_pmi()`/`scrape_us_pmi()` are deliberately best-effort: any
-failure (network, parsing, structure change) is caught and turned into a
-`None` return rather than raising, matching the UI's "실패 시 에러 없이
-조용히 입력창을 비워두고 수기 입력으로 폴백" behavior (see app.py's PMI
-refresh button).
-
-COMEX copper warehouse stocks are NOT scraped here. The documented free
-endpoint (cmegroup.com/delivery_reports/Copper_Stocks.xls) returned HTTP 403
-with an explicit "prohibited under CME Group's Data Terms of Use" message
-when checked — i.e. automated access to that endpoint is against the data
-provider's stated terms, not merely technically inconvenient. COMEX stock is
-therefore a manual-entry-only indicator (see comex_store.py), same pattern
-as the PMI manual fallback but without an auto-fetch attempt.
+Unlike the Gold project, this module has NO FRED dependency at all: real_rate
+(FRED DFII10) was dropped entirely (no meaningful copper analog — see
+config.py's module docstring), and both remaining indicators (DXY, FXI) plus
+the international copper benchmark (HG=F) are all Yahoo Finance tickers. This
+also means, unlike Gold, this project needs no FRED_API_KEY secret anywhere.
 """
 
 import logging
 import re
+from datetime import date as _date
 
 import pandas as pd
 import requests
@@ -32,19 +22,18 @@ from tenacity import (
     wait_exponential,
 )
 
-REQUEST_TIMEOUT = 30
-DXY_TICKERS = ["DX-Y.NYB", "^DXY", "DX=F"]
-COPPER_TICKER = "HG=F"
-GOLD_TICKER = "GC=F"
-WTI_TICKER = "CL=F"
+from . import config
+
+# Naver's finance chart-data endpoint mirrors KRX's own official daily
+# OHLCV for any listed ticker (stocks and ETFs alike) — a read-only JSON-ish
+# GET with no authentication, unlike KRX's own data.krx.co.kr (which
+# requires a logged-in session for this kind of historical query).
+NAVER_SISE_JSON_URL = "https://api.finance.naver.com/siseJson.naver"
+REQUEST_TIMEOUT = 60
 
 logger = logging.getLogger(__name__)
 
-# Max 3 attempts, waiting 5-10s between retries with exponential backoff —
-# for the yfinance price fetchers only. PMI scraping uses its own single-
-# attempt-per-source helper (_get_text) since a failed scrape should fall
-# through to manual entry quickly, not hang the "PMI 새로고침" button click
-# on repeated retries against a page whose structure may have simply changed.
+# Max 3 attempts, waiting 5-10s between retries with exponential backoff.
 _retry_network_call = retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(multiplier=5, min=5, max=10),
@@ -63,16 +52,10 @@ _retry_network_call = retry(
 def _download_yfinance_close(ticker: str, start, end) -> pd.Series:
     hist = yf.Ticker(ticker).history(start=start, end=end, interval="1d", auto_adjust=False)
     close = hist["Close"].dropna()
-    if close.empty:
-        # Checked before touching .index.tz: on a connection failure
-        # yfinance's own history() can swallow the error and return an
-        # empty frame rather than raising, and an empty result's Index is a
-        # plain Index (no .tz attribute at all, unlike a real DatetimeIndex)
-        # — accessing .tz first would raise a confusing AttributeError
-        # instead of this clear, retryable RuntimeError.
-        raise RuntimeError(f"no data returned for ticker {ticker!r}")
     if close.index.tz is not None:
         close.index = close.index.tz_localize(None)
+    if close.empty:
+        raise RuntimeError(f"no data returned for ticker {ticker!r}")
     return close.rename(ticker)
 
 
@@ -98,75 +81,59 @@ def fetch_yfinance_close(tickers, start=None, end=None) -> pd.Series:
     )
 
 
-def fetch_gold_copper_ratio(start=None, end=None) -> pd.Series:
-    """Daily gold/copper ratio computed from GC=F and HG=F closes."""
-    gold = fetch_yfinance_close(GOLD_TICKER, start=start, end=end)
-    copper = fetch_yfinance_close(COPPER_TICKER, start=start, end=end)
-    df = pd.concat([gold, copper], axis=1, keys=["gold", "copper"]).dropna()
-    return (df["gold"] / df["copper"]).rename("gold_copper_ratio")
+@_retry_network_call
+def _download_naver_sise_json(symbol: str, start_time: str, end_time: str) -> str:
+    resp = requests.get(
+        NAVER_SISE_JSON_URL,
+        params={"symbol": symbol, "requestType": 1, "startTime": start_time, "endTime": end_time, "timeframe": "day"},
+        headers={"User-Agent": "Mozilla/5.0"},
+        timeout=REQUEST_TIMEOUT,
+    )
+    resp.raise_for_status()
+    return resp.text
 
 
-# ---------------------------------------------------------------------------
-# PMI best-effort scraping. Each function returns a dict
-# {"value": float, "period": "YYYY-MM"} on success, or None on any failure —
-# never raises, so a broken scraper degrades to the manual-entry UI instead
-# of crashing the "PMI 새로고침" button.
-# ---------------------------------------------------------------------------
+def fetch_krx_etf_close(symbol: str, start=None, end=None) -> pd.Series:
+    """Fetch daily close prices for a KRX-listed ticker (stock or ETF, e.g.
+    "138910" for KODEX 구리선물(H)) via Naver's siseJson chart-data endpoint.
 
-_SCRAPE_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (compatible; copper-dashboard-pmi-refresh/1.0)"
-}
+    The endpoint's response isn't quite valid JSON (a bare JS array literal
+    with a stray leading space and inconsistent quoting) but is close enough
+    that `ast.literal_eval`-style row extraction via a small regex is more
+    robust than trying to coerce it through `json.loads` directly. Returns a
+    date-indexed float Series named `symbol`. `start`/`end` (dates, optional)
+    bound the fetch window; both inclusive, unlike fetch_yfinance_close's
+    exclusive `end` (this endpoint takes YYYYMMDD bounds directly, so there is
+    no off-by-one convention to inherit from yfinance).
+    """
+    start_time = (start or _date(2000, 1, 1)).strftime("%Y%m%d") if hasattr(start, "strftime") else "20000101"
+    end_time = (end or _date.today()).strftime("%Y%m%d") if hasattr(end, "strftime") else _date.today().strftime("%Y%m%d")
 
-
-def _get_text(url: str) -> str | None:
     try:
-        resp = requests.get(url, headers=_SCRAPE_HEADERS, timeout=REQUEST_TIMEOUT)
-        resp.raise_for_status()
-        return resp.text
+        text = _download_naver_sise_json(symbol, start_time, end_time)
     except Exception as exc:
-        logger.info("PMI scrape fetch failed for %s: %r", url, exc)
-        return None
+        raise RuntimeError(f"failed to fetch Naver sise data for {symbol!r}: {exc!r}") from exc
+
+    # Each data row looks like: ["20240102", 6845, 6845, 6725, 6780, 4237, 0.0]
+    # (date, open, high, low, close, volume, foreign-ownership%) — pull out
+    # just the date (group 1) and close (group 5th numeric field).
+    rows = re.findall(r'\["(\d{8})",\s*[\d.]+,\s*[\d.]+,\s*[\d.]+,\s*([\d.]+),\s*[\d.]+,\s*[\d.]+\]', text)
+    if not rows:
+        raise RuntimeError(f"no rows parsed from Naver sise data for {symbol!r}")
+
+    dates = pd.to_datetime([r[0] for r in rows], format="%Y%m%d")
+    closes = [float(r[1]) for r in rows]
+    series = pd.Series(closes, index=dates, name=symbol).sort_index()
+    return series[~series.index.duplicated(keep="last")]
 
 
-def scrape_china_pmi() -> dict | None:
-    """Best-effort: TradingEconomics' China manufacturing PMI page, which
-    renders the current headline figure as plain text with no login/JS
-    requirement. Not a stable API — if TradingEconomics changes its markup,
-    this silently returns None and the UI falls back to manual entry.
+def fetch_krx_copper_etf_krw() -> pd.Series:
+    """Fetch the full daily price history of KODEX 구리선물(H) (138910) — the
+    KRW-denominated, currency-hedged, COMEX-linked ETF used as this project's
+    domestic ("krx") copper price basis. See config.py's module docstring for
+    why this ETF (not TIGER 구리실물, LME-based and unhedged) was chosen.
     """
-    html = _get_text("https://tradingeconomics.com/china/manufacturing-pmi")
-    if html is None:
-        return None
-    # TradingEconomics renders the latest value inside the page's headline
-    # stats table; look for the first plausible PMI-range decimal near the
-    # word "Manufacturing PMI".
-    match = re.search(r"Manufacturing PMI[^0-9]{0,200}?(\d{2}\.\d)", html, re.IGNORECASE | re.DOTALL)
-    if not match:
-        return None
-    try:
-        value = float(match.group(1))
-    except ValueError:
-        return None
-    if not (20.0 <= value <= 80.0):  # sanity bound — PMI is conventionally 0-100, realistically 30-65
-        return None
-    return {"value": value, "period": None}
-
-
-def scrape_us_pmi() -> dict | None:
-    """Best-effort: TradingEconomics' US ISM/business-confidence page.
-    ISM's own site requires an SSO login for the full report and is not
-    scrapable; TradingEconomics mirrors the headline number for free.
-    """
-    html = _get_text("https://tradingeconomics.com/united-states/business-confidence")
-    if html is None:
-        return None
-    match = re.search(r"ISM Manufacturing PMI[^0-9]{0,200}?(\d{2}\.\d)", html, re.IGNORECASE | re.DOTALL)
-    if not match:
-        return None
-    try:
-        value = float(match.group(1))
-    except ValueError:
-        return None
-    if not (20.0 <= value <= 80.0):
-        return None
-    return {"value": value, "period": None}
+    series = fetch_krx_etf_close(config.KRX_COPPER_ETF_TICKER)
+    if series.empty:
+        raise RuntimeError("no KODEX 구리선물(H) price data returned")
+    return series.rename("krx_copper_krw")

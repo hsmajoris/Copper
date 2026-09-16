@@ -1,10 +1,5 @@
-"""CLI entrypoint run by the daily GitHub Actions workflow: fetches fresh
-daily-indicator data (DXY/WTI/gold-copper ratio) and writes
-data/latest.json for the Streamlit app to read. PMI and COMEX are NOT
-touched here — they're saved independently through the app's own
-button-refresh + manual-entry UI (see pmi_store.py/comex_store.py), so this
-script only ever updates the daily-frequency portion of the payload.
-"""
+"""CLI entrypoint run by the daily GitHub Actions workflow: fetches fresh data
+and writes data/latest.json for the Streamlit app to read."""
 
 import json
 from pathlib import Path

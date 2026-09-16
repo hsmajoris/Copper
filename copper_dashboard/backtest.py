@@ -1,491 +1,647 @@
-"""Signal-based backtest: the weighted copper_friendly score (config.py /
-signals.py — same score the main dashboard displays) drives a buy-when-
-score-crosses-above / sell-when-score-crosses-below strategy on copper
-(HG=F), compared against a same-period Buy & Hold benchmark.
+"""Signal-based backtest: DXY/FXI MA breakout signals (green_count) and a
+52-week new-high/new-low breakout, compared against a same-period Buy & Hold
+benchmark.
 
-Backtest indicators: copper's own 200-day trend filter, DXY, WTI, gold/copper
-ratio always; China PMI / US ISM PMI are added automatically once enough
-monthly history has accumulated in pmi_history.csv (see
-MIN_PMI_MONTHS_FOR_BACKTEST below) — there is no free, verified 10-year
-historical PMI series (see README.md "PMI 히스토리컬 데이터"), so unlike the
-Gold dashboard (which had 10 years of FRED/yfinance history for every
-indicator on day one), Copper's PMI backtest coverage starts thin and grows
-as the live dashboard accumulates saved PMI readings month by month.
+This is a direct structural port of the Gold dashboard's backtest.py — same
+5-stage pipeline (fetch_raw_data -> compute_signals -> trim_to_backtest_window
+-> run_backtest -> compute_metrics), same green_count mechanic, same 52-week
+triggers, same symmetric noise filters, same fee model. See
+COPPER_TRADING_LOGIC.md for the full design writeup and 9장 for exactly what
+was changed vs. Gold and why.
 
-COMEX stock is excluded from the backtest entirely, per the task brief — no
-free historical archive exists at all for it.
+Every moving-average window in this module (green_count's dxy/fxi SMAs, the
+noise filters' shared long-term SMA) is a calendar-day (역일) window, not
+a trading-day count — see metrics.compute_sma. The day-to-day state machine in
+run_backtest() itself (minimum holding period, the noise filters' D0+N check)
+is likewise calendar-day based.
 
---- v2 (2026-09) ---
+Buy (while flat): green_count >= BUY_GREEN_COUNT OR a fresh 52-week high
+  (copper_new_52w_high)
+Sell (while holding): green_count == SELL_GREEN_COUNT OR a fresh 52-week low
+  (copper_new_52w_low)
 
-Every mechanism the v1-vs-v2 diagnosis called for (rolling-percentile
-gold/copper ratio, the copper's-own-trend safety net, whipsaw suppression,
-the DXY method choice, stop loss) is a field on `StrategyParams` below,
-defaulting to the v2 config.py values but independently switchable — that's
-what lets scripts/validate_v2.py turn each one on/off for the required
-ablation study, and what lets `StrategyParams.v1_baseline()` reproduce the
-exact v1 rules for the required "v1 vs v2" comparison, all through the same
-`compute_signals`/`run_backtest` engine rather than two parallel
-implementations that could silently drift apart.
+All fills happen at the signal day's own close, immediately — there is no
+delay/lag setting for any trigger (subject to the noise filters below
+deferring execution pending confirmation).
 """
 
-from dataclasses import dataclass, field
 from datetime import date, timedelta
 
-import numpy as np
 import pandas as pd
+import streamlit as st
 
 from . import config
 from . import metrics
-from . import pmi_store
 from . import signals
 from . import timeseries as ts
 from .timeutil import today_kst
 
-MA_WINDOWS = [60, 30, 5]
+# Shared with the main dashboard's own MA columns/highlighting/chart shading
+# (config.py) so both can never drift apart — see compute_signals below.
+MA_WINDOWS = config.MA_WINDOWS
 
-BACKTEST_YEARS = ts.YEARS  # default analysis period; the 유효성 검증 page lets the
-# user override this per-session (3-10 years) without affecting the main
-# dashboard's fixed-window charts.
-MIN_BACKTEST_YEARS = 3
-MAX_BACKTEST_YEARS = 10
-BUFFER_DAYS = ts.BUFFER_DAYS
+MIN_BACKTEST_YEARS = 1
+MAX_BACKTEST_YEARS = 15
+# Default analysis period a fresh session starts on; the 유효성 검증 page lets
+# the user override this per-session (1-15 years) without affecting the main
+# dashboard's own fixed-window charts (app.py's CHART_YEARS, unrelated to
+# this). Deliberately independent of timeseries.YEARS. Deliberately NOT tied
+# to MAX_BACKTEST_YEARS (raising the max shouldn't silently raise the default
+# a fresh session starts on).
+BACKTEST_YEARS = 10
+# Extra calendar days of history fetched before the analysis start. The
+# noise filters' LONG_TREND_WINDOW-day (calendar) SMA would only need 180
+# calendar days minimum, but the 52-week new-high/new-low triggers' own
+# FIFTY_TWO_WEEK_WINDOW_DAYS (365) window is the larger, binding requirement
+# — deliberately independent of timeseries.BUFFER_DAYS, which only needs to
+# cover MA_WINDOWS' own max (90 days) for the main dashboard's per-indicator
+# chart fetches.
+BUFFER_DAYS = 430
 
-# Below this many saved monthly readings, a PMI indicator is left out of the
-# backtest's score computation (its weight is excluded from the denominator
-# too, same reweighting rule signals.compute_copper_friendly_score uses for
-# a stale/missing live reading).
-MIN_PMI_MONTHS_FOR_BACKTEST = 12
+# green_count now sums 2 indicators (dxy, fxi) x 3 windows (90/30/7 calendar
+# days) = 6 cells, same 0-6 range and same unanimity defaults as Gold's
+# real_rate+dxy pair (see COPPER_TRADING_LOGIC.md 3장/11장 for why this
+# starts at Gold's own defaults rather than a freshly-tuned number — the
+# task brief asked for these to start identical and be adjusted later, if
+# at all, from real backtest results, not guessed up front).
+GREEN_COUNT_INDICATORS = ("dxy", "fxi")
+BUY_GREEN_COUNT = 6
+SELL_GREEN_COUNT = 0
+# No minimum holding period by default: a qualifying sell (green_count,
+# 52-week-low, or the sell-noise filter's own D0+N resolution) can fire the
+# day after entry. User-adjustable — raise this to simulate a longer-horizon
+# strategy that ignores sell triggers for a while after buying.
+DEFAULT_MIN_HOLDING_DAYS = 0
 
-BUY_SCORE_CUTOFF = config.SCORE_BUY_FRIENDLY_CUTOFF
-SELL_SCORE_CUTOFF = config.SCORE_SELL_UNFRIENDLY_CUTOFF
-GC_RATIO_BUY_THRESHOLD = config.DEFAULT_GC_RATIO_BUY_THRESHOLD
-GC_RATIO_SELL_THRESHOLD = config.DEFAULT_GC_RATIO_SELL_THRESHOLD
+# copper's own long-term SMA, shared by the sell- and buy-signal noise
+# filters below as the "in a clear uptrend/downtrend" gate they compare
+# price against — one shared column (copper_sma_long), two independent
+# consumers.
+LONG_TREND_WINDOW = 180  # 6 calendar months
 
+# 52-week new-high/new-low breakout: independent buy/sell triggers (OR'd in
+# alongside green_count on the buy side; OR'd in alongside green_count on the
+# sell side). Each fires only on the day copper's close is strictly above
+# (new-high) or below (new-low) the highest/lowest close of the prior
+# FIFTY_TWO_WEEK_WINDOW_DAYS calendar days (a fresh breakout, not "currently
+# at/above/below the 52-week high/low" — see compute_signals).
+FIFTY_TWO_WEEK_WINDOW_DAYS = 365
+DEFAULT_USE_FIFTY_TWO_WEEK_HIGH_TRIGGER = True
+DEFAULT_USE_FIFTY_TWO_WEEK_LOW_TRIGGER = True
 
-@dataclass
-class StrategyParams:
-    """Every knob the strategy can be run with, defaulting to config.py's v2
-    values. Passed through compute_signals -> run_backtest as a single
-    object so "what changed between two backtest runs" is always a diff of
-    two StrategyParams instances, and so ablation (scripts/validate_v2.py)
-    can toggle exactly one mechanism at a time without touching the rest.
-    """
+# Sell-signal noise filter: while copper is well above its LONG_TREND_WINDOW-
+# day (calendar) SMA (a possible sign the sell signal is a blip in an ongoing
+# uptrend rather than a genuine reversal), a qualifying sell signal is ignored
+# and a 7-calendar-day "wait and see" period starts instead of executing it
+# immediately. See run_backtest's docstring for the exact mechanism.
+DEFAULT_SELL_NOISE_FILTER_BUFFER_PCT = 5.0
 
-    buy_cutoff: float = config.SCORE_BUY_FRIENDLY_CUTOFF
-    sell_cutoff: float = config.SCORE_SELL_UNFRIENDLY_CUTOFF
+# Buy-signal noise filter — the exact mirror image of the sell-signal filter
+# above, direction flipped. See run_backtest's docstring for the exact
+# mechanism.
+DEFAULT_BUY_NOISE_FILTER_BUFFER_PCT = 5.0
 
-    # fix 1: gold/copper ratio judgment
-    use_rolling_ratio: bool = config.GC_RATIO_USE_ROLLING_PERCENTILE
-    gc_rolling_window: int = config.GC_RATIO_ROLLING_WINDOW
-    gc_percentile_buy: float = config.GC_RATIO_PERCENTILE_BUY
-    gc_percentile_sell: float = config.GC_RATIO_PERCENTILE_SELL
-    gc_abs_buy_threshold: float = config.DEFAULT_GC_RATIO_BUY_THRESHOLD
-    gc_abs_sell_threshold: float = config.DEFAULT_GC_RATIO_SELL_THRESHOLD
+# Exit/entry confirmation, method ① (default) — "매일 갱신 2시그마 밴드": every
+# trading day of the observation window gets its OWN, wider confirmation
+# threshold instead of one fixed checkpoint. Shared, direction-agnostic math
+# for BOTH the sell- and buy-signal noise filters (only the comparison
+# direction differs — see noise_band_pct and run_backtest).
+#
+# Derivation (√t rule for a random walk's cumulative volatility):
+#   daily_vol   = monthly_vol / sqrt(trading_days_per_month)
+#   band(t)     = sigma_multiplier * daily_vol * sqrt(t)     (t = trading
+#                 days elapsed since D0, 1..max)
+# With monthly_vol = 7.11% (copper's own ~20-year historical monthly
+# volatility, computed directly from HG=F — see COPPER_TRADING_LOGIC.md
+# 9장/5장 for the calculation; Gold's own equivalent constant uses gold's own
+# ~30-year monthly vol of 4.9%, notably lower — copper is a more volatile,
+# cyclicality-driven industrial metal, not a safe-haven asset), trading_days_
+# per_month = 21, sigma_multiplier = 2:
+#   daily_vol = 7.11% / sqrt(21) = 1.5517%
+#   band(1)  = 2 * 1.5517% * sqrt(1)  =  3.10%
+#   band(5)  = 2 * 1.5517% * sqrt(5)  =  6.94%
+#   band(10) = 2 * 1.5517% * sqrt(10) =  9.81%
+#   band(14) = 2 * 1.5517% * sqrt(14) = 11.61%
+#   band(21) = 2 * 1.5517% * sqrt(21) = 14.22%  (= 2 * monthly_vol exactly,
+#              since sqrt(21) cancels the /sqrt(21) above)
+# A sell/buy actually executes the first day the close is at or beyond
+# `d0_close * (1 -/+ band(t))`. If no day in 1..NOISE_BAND_MAX_TRADING_DAYS
+# reaches its own band, the episode is released (D0 is discarded, as if that
+# first candidate never happened).
+DEFAULT_SELL_NOISE_USE_DAILY_BAND = True
+DEFAULT_BUY_NOISE_USE_DAILY_BAND = True
+NOISE_BAND_SIGMA_MULTIPLIER = 2.0
+NOISE_BAND_MONTHLY_VOL_PCT = 7.11  # copper's own ~20-year historical monthly volatility (HG=F)
+NOISE_BAND_TRADING_DAYS_PER_MONTH = 21
+NOISE_BAND_MIN_CHECK_TRADING_DAYS = 8  # first day the band is actually checked
+NOISE_BAND_MAX_TRADING_DAYS = 21  # observation window cap (~3 weeks)
 
-    # fix 2: copper's own trend filter + partial-exit safety net
-    use_copper_trend: bool = config.COPPER_TREND_ENABLED
-    copper_trend_sma_window: int = config.COPPER_TREND_SMA_WINDOW
-    copper_trend_partial_exit: bool = config.COPPER_TREND_PARTIAL_EXIT_ENABLED
-    copper_trend_partial_exit_fraction: float = config.COPPER_TREND_PARTIAL_EXIT_FRACTION
-
-    # fix 3: whipsaw suppression (asymmetric cutoff band + persistence + min hold)
-    use_whipsaw_suppression: bool = config.WHIPSAW_SUPPRESSION_ENABLED
-    signal_confirmation_days: int = config.SIGNAL_CONFIRMATION_DAYS
-    min_holding_days: int = config.MIN_HOLDING_DAYS
-
-    # fix 4: DXY judgment method
-    dxy_method: str = config.DXY_SIGNAL_METHOD  # "roc" or "sma"
-    dxy_roc_window: int = config.DXY_ROC_WINDOW
-
-    # fix 5: stop loss
-    use_stop_loss: bool = config.STOP_LOSS_ENABLED
-    stop_loss_pct: float = config.STOP_LOSS_PCT
-
-    # indicator weights (only keys present are looked up; see compute_signals)
-    weights: dict = field(default_factory=lambda: dict(config.WEIGHTS))
-
-    # pre-existing, independent knobs (unrelated to the v1-vs-v2 diagnosis,
-    # left as optional advanced settings on the backtest page)
-    use_new_high_buy: bool = False
-    entry_delay_days: int = 0
-    exit_delay_days: int = 0
-
-    @classmethod
-    def v1_baseline(cls) -> "StrategyParams":
-        """Reproduces the exact v1 scoring/trading rules, for the "v1 vs v2"
-        comparison the task brief requires: absolute gold/copper thresholds,
-        no copper-trend filter, symmetric 60/40 cutoffs, no persistence/
-        min-holding/stop-loss, DXY via its own-SMA position, and v1's
-        original weights (no copper_trend).
-        """
-        return cls(
-            buy_cutoff=config.LEGACY_V1_BUY_CUTOFF,
-            sell_cutoff=config.LEGACY_V1_SELL_CUTOFF,
-            use_rolling_ratio=False,
-            use_copper_trend=False,
-            copper_trend_partial_exit=False,
-            use_whipsaw_suppression=False,
-            signal_confirmation_days=1,
-            min_holding_days=0,
-            dxy_method="sma",
-            use_stop_loss=False,
-            weights={
-                "dxy": 1.0,
-                "gold_copper_ratio": 0.8,
-                "china_pmi": 0.7,
-                "us_pmi": 0.7,
-                "wti": 0.4,
-            },
-        )
-
-
-def required_buffer_days(params: StrategyParams) -> int:
-    """How many extra calendar days of history to fetch before the display
-    window starts, so every rolling calculation (60-day SMA, the 2-year
-    gold/copper percentile window, the 200-day copper trend SMA, DXY's ROC
-    window — whichever of these `params` actually enables) already has a
-    full window on day 1 of the requested backtest period, instead of
-    silently reporting a neutral (0) direction for its first year or two.
-    """
-    trading_windows = list(MA_WINDOWS)
-    if params.use_rolling_ratio:
-        trading_windows.append(params.gc_rolling_window)
-    if params.use_copper_trend:
-        trading_windows.append(params.copper_trend_sma_window)
-    if params.dxy_method == "roc":
-        trading_windows.append(params.dxy_roc_window)
-    max_window = max(trading_windows)
-    return max(BUFFER_DAYS, int(max_window * 366 / 252) + 30)
+# Confirmation, method ② (legacy, used when the checkbox above is OFF) — a
+# single fixed checkpoint at D0+7 calendar days.
+SELL_NOISE_FILTER_WINDOW_DAYS = 7
+BUY_NOISE_FILTER_WINDOW_DAYS = 7
+DEFAULT_SELL_NOISE_FILTER_DROP_PCT = 5.0
+DEFAULT_BUY_NOISE_FILTER_RISE_PCT = 5.0
 
 
-def fetch_raw_data(as_of: date | None = None, years: int = BACKTEST_YEARS, buffer_days: int = BUFFER_DAYS) -> pd.DataFrame:
-    """Fetch dxy/wti/gold/copper as one date-aligned, forward-filled frame
-    covering `years` + `buffer_days` of history ending at `as_of` (default
-    today, KST). Thin wrapper around the shared fetcher in timeseries.py."""
-    return ts.fetch_backtest_frame(as_of, years=years, buffer_days=buffer_days)
+def noise_band_pct(elapsed_trading_days: int) -> float:
+    """The method-① confirmation threshold (as a fraction, e.g. 0.031 for
+    3.1%) for a D0+`elapsed_trading_days`-trading-day check — see the
+    derivation above DEFAULT_SELL_NOISE_USE_DAILY_BAND. Shared by both the
+    sell- and buy-signal noise filters (identical math; only the direction
+    the caller compares against differs)."""
+    daily_vol_pct = NOISE_BAND_MONTHLY_VOL_PCT / (NOISE_BAND_TRADING_DAYS_PER_MONTH ** 0.5)
+    return NOISE_BAND_SIGMA_MULTIPLIER * daily_vol_pct * (elapsed_trading_days ** 0.5) / 100.0
+
+# Default assumed annual yield for the "미보유기간 채권투자 가정" hybrid CAGR
+# below. Adjustable per-run via simulate()'s bond_annual_yield argument.
+DEFAULT_BOND_ANNUAL_YIELD = 0.10
+
+# ---------------------------------------------------------------------------
+# KODEX 구리선물(H) (138910) real trading costs — see COPPER_TRADING_LOGIC.md
+# 6-2장 for the full writeup, including why this project charges only ONE
+# explicit cost here (unlike Gold's KRX 금현물 model, which charges both a
+# transaction fee AND a daily custody fee on top of a raw physical spot
+# price that embeds neither):
+#   - Transaction fee: a small, one-time online-brokerage commission on the
+#     traded notional, charged at every buy and every sell fill. 0.014% here
+#     is CONFIRMED against 2026 standard (non-event) online HTS/MTS ETF
+#     commission schedules — 하나증권's published standard rate (0.0140%,
+#     unchanged even above 1억원 notional) is the lowest of the major
+#     brokerages' STANDARD rates; several brokerages run temporary
+#     promotional rates as low as 0.003-0.004%, but those are time-limited
+#     events, not something a long-horizon default should assume — swap
+#     DEFAULT_BUY_FEE_PCT/DEFAULT_SELL_FEE_PCT for your own broker's actual
+#     schedule. This is a real external cost (a brokerage fee charged on top
+#     of whatever price you traded at) that is never embedded in the traded
+#     price itself, so charging it here is not double-counting anything.
+#   - Ongoing fund cost (총보수, 0.68%/year, CONFIRMED against Samsung Asset
+#     Management's own official fund fact sheet, 기준일 2025-06-30:
+#     지정판매 0.001% + 집합투자 0.599% + 신탁 0.04% + 일반사무 0.04% = 0.68%)
+#     is DELIBERATELY NOT charged anywhere in this simulation as a separate
+#     daily deduction. Unlike Gold's KRX 금현물 (a raw physical spot quote
+#     with no expense ratio baked in at all), this project's ② KRX basis
+#     uses KODEX 구리선물(H)'s own OBSERVED, ACTUALLY-TRADED market close
+#     (ts.fetch_backtest_frame -> fetch_copper_price_series -> data_sources.
+#     fetch_krx_copper_etf_krw, real Naver-sourced prints, not a price
+#     reconstructed from HG=F). A fund's total expense ratio is accrued
+#     daily against the fund's own assets and is therefore already reflected
+#     in its NAV's day-to-day path, which the ETF's market price tracks
+#     closely — so this observed price series already has the 0.68%/year
+#     cost embedded in it. An earlier version of this module additionally
+#     applied `annual_to_daily_fee_pct(0.68)` as an explicit daily_holding_
+#     fee_pct on top of this same observed price, which double-charged that
+#     0.68%/year (confirmed after this was flagged and investigated — see
+#     COPPER_TRADING_LOGIC.md 6-2장/9장). That extra deduction has been
+#     removed; only the transaction fee above remains as an explicit cost.
+#     Note (relevant when comparing ① HG=F vs ② KODEX 구리선물(H) backtest
+#     results): the same fact sheet shows this ETF's since-inception return
+#     diverging sharply from its own benchmark index (ETF -16.40% vs index
+#     +13.98% as of 2025-06-30, a -30.38%p tracking gap) — mostly futures
+#     roll yield/contango cost and FX-hedging cost on the futures the fund
+#     actually holds (not the 0.68%/year expense ratio alone, which would
+#     only account for a few percentage points of that gap over the same
+#     span). None of this is charged anywhere by this simulation as an
+#     explicit fee; it is reproduced automatically, exactly once, simply by
+#     using the ETF's own actual traded price series under basis ②.
+# Both are meaningless for the international HG=F basis (a paper reference
+# price, not a tradable domestic instrument) — the UI is responsible for
+# passing 0.0 there; simulate()/run_backtest() themselves don't know or care
+# which basis is in use, only the fee rates they're given.
+DEFAULT_BUY_FEE_PCT = 0.014  # CONFIRMED — 하나증권 2026 standard (non-event) ETF commission
+DEFAULT_SELL_FEE_PCT = 0.014  # CONFIRMED — see above
 
 
-def _pmi_daily_direction(indicator_key: str, index: pd.DatetimeIndex) -> tuple[pd.Series, bool]:
-    """Forward-filled daily +1/-1 direction series for one PMI indicator,
-    aligned to `index`, plus whether it has enough history
-    (>= MIN_PMI_MONTHS_FOR_BACKTEST) to be included in the backtest at all.
-    Days before the first saved PMI reading get direction 0 (neutral) since
-    there is nothing to forward-fill from yet.
-    """
-    history = pmi_store.history_for_backtest(indicator_key)
-    if len(history) < MIN_PMI_MONTHS_FOR_BACKTEST:
-        return pd.Series(0, index=index), False
-    monthly = history["value"].reindex(index, method=None)
-    # Reindexing a monthly (month-start) index onto a daily index leaves
-    # every non-month-start day NaN; forward-fill from the last known
-    # reading, same as how the price series are day-to-day carried forward
-    # across non-trading days elsewhere in this pipeline.
-    combined_index = index.union(history.index)
-    daily_value = history["value"].reindex(combined_index).ffill().reindex(index)
-    direction = daily_value.apply(lambda v: signals.pmi_direction_score(v))
-    return direction.fillna(0).astype(int), True
+def _daily_fee_decay(elapsed_days: float, daily_fee_pct: float) -> float:
+    """Multiplicative factor for a holding fee expressed as a flat DAILY rate
+    — `daily_fee_pct` is compounded once per elapsed calendar day (never
+    divided by 365; it's already a per-day rate). 1.0 (no-op) when
+    `daily_fee_pct` is 0."""
+    return (1.0 - daily_fee_pct / 100.0) ** elapsed_days
 
 
-def _own_sma_all_windows_direction(series: pd.Series, direction: str) -> pd.Series:
-    """+1/0/-1 direction series: +1 where `series` sits on its own-MA
-    copper-friendly side for ALL of MA_WINDOWS simultaneously, -1 where it's
-    on the unfriendly side for all of them, 0 where the windows disagree.
-    Shared by WTI (always) and DXY (when dxy_method="sma", i.e. v1's rule).
-    """
-    friendly_flags = [
-        signals.copper_friendly_vs_ma(series, metrics.compute_sma(series, window), direction)
-        for window in MA_WINDOWS
-    ]
-    all_friendly = friendly_flags[0]
-    for f in friendly_flags[1:]:
-        all_friendly = all_friendly & f
-    all_unfriendly = ~friendly_flags[0]
-    for f in friendly_flags[1:]:
-        all_unfriendly = all_unfriendly & (~f)
-    return np.select([all_friendly, all_unfriendly], [1, -1], default=0)
-
-
-def compute_signals(df: pd.DataFrame, params: StrategyParams | None = None) -> pd.DataFrame:
-    """Adds each indicator's +1/0/-1 direction column, the combined raw/
-    normalized copper_friendly score, and the gold/copper ratio itself —
-    all driven by `params` (defaults to the current v2 config values; pass
-    StrategyParams.v1_baseline() to reproduce v1 exactly).
-    """
-    params = params or StrategyParams()
-    df = df.copy()
-    df["gold_copper_ratio"] = df["gold"] / df["copper"]
-
-    # --- fix 4: DXY via v1's own-SMA position, or v2's rate of change ---
-    if params.dxy_method == "roc":
-        roc = signals.dxy_rate_of_change(df["dxy"], window=params.dxy_roc_window)
-        df["dxy_roc"] = roc
-        df["dxy_direction"] = np.select([roc < 0, roc > 0], [1, -1], default=0)
-    else:
-        df["dxy_direction"] = _own_sma_all_windows_direction(df["dxy"], signals.indicator_direction("dxy"))
-
-    # --- WTI: unchanged own-SMA-all-windows-agree rule ---
-    df["wti_direction"] = _own_sma_all_windows_direction(df["wti"], signals.indicator_direction("wti"))
-
-    # --- fix 1: gold/copper ratio via v1's absolute thresholds, or v2's
-    # rolling percentile rank ---
-    if params.use_rolling_ratio:
-        percentile = signals.rolling_percentile_rank(df["gold_copper_ratio"], params.gc_rolling_window)
-        df["gold_copper_ratio_percentile"] = percentile
-        df["gold_copper_ratio_direction"] = np.select(
-            [percentile <= params.gc_percentile_buy, percentile >= params.gc_percentile_sell],
-            [1, -1],
-            default=0,
-        )
-    else:
-        df["gold_copper_ratio_direction"] = np.select(
-            [
-                df["gold_copper_ratio"] <= params.gc_abs_buy_threshold,
-                df["gold_copper_ratio"] >= params.gc_abs_sell_threshold,
-            ],
-            [1, -1],
-            default=0,
-        )
-
-    # --- fix 2: copper's own 200-day trend filter (new indicator, also
-    # drives the partial-exit safety net inside run_backtest) ---
-    copper_sma = metrics.compute_sma(df["copper"], params.copper_trend_sma_window)
-    df["copper_trend_sma"] = copper_sma
-    df["copper_above_trend_sma"] = (df["copper"] > copper_sma).fillna(False)
-    df["copper_trend_direction"] = np.select(
-        [df["copper"] > copper_sma, df["copper"] <= copper_sma], [1, -1], default=0
+def fetch_raw_data(
+    as_of: date | None = None,
+    years: int = BACKTEST_YEARS,
+    copper_price_basis: str = config.COPPER_PRICE_BASIS_DEFAULT,
+) -> pd.DataFrame:
+    """Fetch dxy/fxi/copper as one date-aligned, forward-filled frame
+    covering `years` + BUFFER_DAYS of history ending at `as_of` (default
+    today, KST). Thin wrapper around the shared fetcher in timeseries.py.
+    See fetch_backtest_frame for what `copper_price_basis` does."""
+    return ts.fetch_backtest_frame(
+        as_of, years=years, buffer_days=BUFFER_DAYS, copper_price_basis=copper_price_basis
     )
 
-    active_weights = {
-        "dxy": params.weights.get("dxy", config.WEIGHTS["dxy"]),
-        "wti": params.weights.get("wti", config.WEIGHTS["wti"]),
-        "gold_copper_ratio": params.weights.get("gold_copper_ratio", config.WEIGHTS["gold_copper_ratio"]),
-    }
-    if params.use_copper_trend:
-        active_weights["copper_trend"] = params.weights.get("copper_trend", config.WEIGHTS["copper_trend"])
 
-    pmi_included = {}
-    for key in ("china_pmi", "us_pmi"):
-        direction_series, included = _pmi_daily_direction(key, df.index)
-        df[f"{key}_direction"] = direction_series
-        pmi_included[key] = included
-        if included:
-            active_weights[key] = params.weights.get(key, config.WEIGHTS[key])
+def compute_signals(df: pd.DataFrame) -> pd.DataFrame:
+    """Adds SMA-based copper-friendly flags for dxy/fxi, green_count (0-6),
+    copper's own long-term SMA, and the 52-week new-high/new-low flags:
+    - copper_sma_long: copper's own LONG_TREND_WINDOW-day SMA — the gate the
+      sell-/buy-signal noise filters compare price against.
+    - copper_new_52w_high / copper_new_52w_low: copper's close today is
+      strictly above the highest / below the lowest close of the prior
+      FIFTY_TWO_WEEK_WINDOW_DAYS calendar days (a fresh breakout day, not
+      merely "currently at/above/below the 52-week high/low").
+    """
+    df = df.copy()
+    gf_cols = []
+    for col in GREEN_COUNT_INDICATORS:
+        direction = signals.indicator_direction(col)
+        for window in MA_WINDOWS:
+            sma = metrics.compute_sma(df[col], window)
+            gf_col = f"{col}_gf_{window}"
+            # Delegates to the single shared comparison in signals.py — the
+            # same function build_table.py's highlighting and chart shading
+            # use — so this can never silently drift from those.
+            df[gf_col] = signals.copper_friendly_vs_ma(df[col], sma, direction)
+            gf_cols.append(gf_col)
+    df["green_count"] = df[gf_cols].sum(axis=1).astype(int)
 
-    max_score = sum(active_weights.values())
-    raw_score = sum(df[f"{key}_direction"] * weight for key, weight in active_weights.items())
-    df["raw_score"] = raw_score
-    df["max_score"] = max_score
-    df["copper_friendly_score"] = (raw_score + max_score) / (2 * max_score) * 100.0
+    df["copper_sma_long"] = metrics.compute_sma(df["copper"], LONG_TREND_WINDOW)
 
-    prior_high = df["copper"].shift(1).cummax()
-    df["copper_new_high"] = (df["copper"] > prior_high).fillna(False)
-    df.attrs["pmi_included"] = pmi_included
-    df.attrs["active_weights"] = active_weights
-    df.attrs["params"] = params
+    # closed="left" excludes today's own close from "the prior N days'
+    # high/low" — otherwise every day sitting at its own new high/low would
+    # trivially compare equal to (never above/below) that high/low, and no
+    # breakout could ever be flagged.
+    prior_52w = df["copper"].rolling(f"{FIFTY_TWO_WEEK_WINDOW_DAYS}D", closed="left", min_periods=1)
+    df["copper_new_52w_high"] = (df["copper"] > prior_52w.max()).fillna(False)
+    df["copper_new_52w_low"] = (df["copper"] < prior_52w.min()).fillna(False)
     return df
 
 
 def trim_to_backtest_window(
     df: pd.DataFrame, as_of: date | None = None, years: int = BACKTEST_YEARS
 ) -> pd.DataFrame:
+    """Trims to [end_date - years, end_date]. The upper bound matters even
+    though every caller today fetches `df` already end-bounded at `as_of` —
+    it's what makes a historical `as_of` (see 유효성 검증 page's "기준일"
+    input) safe regardless of how `df` was built, instead of silently
+    relying on the fetch step alone."""
     end_date = as_of or today_kst()
     start_date = end_date - timedelta(days=years * 365)
-    trimmed = df[df.index >= pd.Timestamp(start_date)]
+    trimmed = df[(df.index >= pd.Timestamp(start_date)) & (df.index <= pd.Timestamp(end_date))]
     if trimmed.empty:
         raise RuntimeError("no data available in the requested backtest window")
-    trimmed.attrs.update(df.attrs)
     return trimmed
 
 
-def _buy_reason(score: float, buy_cutoff: float) -> str:
-    return f"score≥{buy_cutoff:g}"
+def _buy_reason(gc: int, buy_green_count: int, include_new_high: bool = False) -> str:
+    reasons = []
+    if gc >= buy_green_count:
+        reasons.append(f"green_count≥{buy_green_count}")
+    if include_new_high:
+        reasons.append("52주 신고가 갱신")
+    return ", ".join(reasons)
 
 
-def _sell_reason(score: float, sell_cutoff: float) -> str:
-    return f"score≤{sell_cutoff:g}"
+def _sell_reason(gc: int, sell_green_count: int, include_new_low: bool = False) -> str:
+    reasons = []
+    if gc <= sell_green_count:
+        reasons.append(f"green_count≤{sell_green_count}")
+    if include_new_low:
+        reasons.append("52주 신저가 갱신")
+    return ", ".join(reasons)
 
 
 def run_backtest(
-    signals_df: pd.DataFrame,
-    params: StrategyParams | None = None,
-) -> tuple[list[dict], pd.Series, pd.Series]:
+    signals: pd.DataFrame,
+    use_new_high_trigger: bool = DEFAULT_USE_FIFTY_TWO_WEEK_HIGH_TRIGGER,
+    use_new_low_trigger: bool = DEFAULT_USE_FIFTY_TWO_WEEK_LOW_TRIGGER,
+    buy_green_count: int = BUY_GREEN_COUNT,
+    sell_green_count: int = SELL_GREEN_COUNT,
+    min_holding_days: int = 0,
+    use_sell_noise_filter: bool = True,
+    sell_noise_filter_buffer_pct: float = DEFAULT_SELL_NOISE_FILTER_BUFFER_PCT,
+    use_daily_band_confirmation: bool = DEFAULT_SELL_NOISE_USE_DAILY_BAND,
+    sell_noise_filter_drop_pct: float = DEFAULT_SELL_NOISE_FILTER_DROP_PCT,
+    use_buy_noise_filter: bool = True,
+    buy_noise_filter_buffer_pct: float = DEFAULT_BUY_NOISE_FILTER_BUFFER_PCT,
+    use_buy_daily_band_confirmation: bool = DEFAULT_BUY_NOISE_USE_DAILY_BAND,
+    buy_noise_filter_rise_pct: float = DEFAULT_BUY_NOISE_FILTER_RISE_PCT,
+    buy_fee_pct: float = 0.0,
+    sell_fee_pct: float = 0.0,
+    daily_holding_fee_pct: float = 0.0,
+) -> tuple[list[dict], pd.Series, pd.Series, pd.Series, list[dict], list[dict]]:
     """Walks the signal frame day by day applying the buy/sell rules.
 
-    Buy (while flat): copper_friendly_score >= buy_cutoff, held for
-    `signal_confirmation_days` consecutive trading days if whipsaw
-    suppression is on (else any single day), then delayed by
-    `entry_delay_days` from the day that confirmation completed. Optionally
-    (`use_new_high_buy`), a fresh copper record high is an immediate,
-    undelayed, unconfirmed alternative buy trigger that also preempts any
-    pending delayed order.
+    Every trigger fills immediately at its own signal day's close — there is
+    no delay/lag setting anywhere in this state machine:
+    - **green_count** (buy: `>= buy_green_count`, sell: `<= sell_green_count`).
+    - The **52-week new-high trigger** (`use_new_high_trigger`, buy side, on
+      by default) and the **52-week new-low trigger** (`use_new_low_trigger`,
+      sell side, on by default). Neither has a cooldown/frequency limit of
+      its own.
 
-    Sell (while holding): the mirror-image confirmed/delayed condition on
-    `sell_cutoff`, not even evaluated until `min_holding_days` TRADING days
-    have passed since entry — except the stop loss below, which is checked
-    unconditionally every day regardless of confirmation or min-holding.
+    `min_holding_days`: once a position is opened, every sell trigger
+    (green_count or 52-week new-low) is ignored entirely until at least this
+    many calendar days have passed since entry.
 
-    Stop loss (fix 5): once price falls `stop_loss_pct` (e.g. -15%) below
-    entry, the entire remaining position is closed immediately, bypassing
-    every other rule above. Re-entry afterwards still needs a fresh
-    confirmed buy signal.
+    Sell-signal noise filter (`use_sell_noise_filter`, on by default):
+    applies to any sell signal (green_count or 52-week new-low) that fires on
+    a day copper's close (D0) is more than `sell_noise_filter_buffer_pct`%
+    above its LONG_TREND_WINDOW-day calendar SMA (`copper_sma_long`) — i.e.
+    still in a clear uptrend, where an isolated sell signal is more likely
+    noise than a genuine reversal. Below that buffer, every sell signal
+    executes immediately exactly as if this filter didn't exist. Above it,
+    the signal is ignored (position stays open) and an observation episode
+    starts, recording D0's date and close price. New qualifying sell signals
+    that fire while an episode is already open are recorded for reference
+    only (see `occurrence_count` below) — they never change or restart D0.
+    Confirmation happens one of two ways:
 
-    Copper-trend partial exit (fix 2): if `use_copper_trend` and
-    `copper_trend_partial_exit` are both on, a sell signal that fires while
-    copper's close is still above its own 200-day SMA trims the position to
-    `copper_trend_partial_exit_fraction` instead of fully closing it (once
-    per holding period) — full exit still happens once copper's close drops
-    below its 200-day SMA (or on a stop loss).
+    - **Method ① — daily band, `use_daily_band_confirmation=True` (default)**:
+      days t = 1..`NOISE_BAND_MIN_CHECK_TRADING_DAYS - 1` after D0 are never
+      checked at all — the position just holds regardless of price. From
+      t = `NOISE_BAND_MIN_CHECK_TRADING_DAYS` through `NOISE_BAND_MAX_
+      TRADING_DAYS`, every trading day's close is compared against a
+      confirmation band that widens with `sqrt(t)` — see `noise_band_pct()`.
+      The first day the close is at or below `d0_close * (1 -
+      noise_band_pct(t))`, the position sells that day. If no day through
+      the window's end reaches its own band, the episode is released unsold
+      and D0 is discarded.
+    - **Method ② — fixed D0+7, `use_daily_band_confirmation=False`**: a
+      single checkpoint at D0+`SELL_NOISE_FILTER_WINDOW_DAYS` calendar days.
+      Sells there only if that close is at least `sell_noise_filter_drop_
+      pct`% below D0's close; otherwise released unsold.
 
-    Returns (trades, equity_curve, bh_equity_curve), both curves starting at
-    1.0 on the first date. Each trade dict covers one full entry-to-flat
-    round trip (a partial exit does not end the round trip — see its
-    `partial_exits` list); `period_return` is the size-weighted blend of
-    every closing price against the single entry price.
+    Buy-signal noise filter (`use_buy_noise_filter`, on by default,
+    independent of everything above): the EXACT mirror of the sell-signal
+    noise filter, direction flipped — applies to any buy signal that fires
+    on a day copper's close (D0) is more than `buy_noise_filter_buffer_pct`%
+    BELOW its LONG_TREND_WINDOW-day calendar SMA.
+
+    `buy_fee_pct`/`sell_fee_pct`: a one-time % of the traded notional charged
+    exactly at the moment of that fill. `daily_holding_fee_pct`: a custody/
+    fund-cost accrued only on days the position is actually held, compounded
+    once per elapsed calendar day (see _daily_fee_decay). All three default
+    to 0.0, reproducing pre-fee behavior exactly.
+
+    Returns (trades, equity_curve, bh_equity_curve, holding_curve,
+    sell_noise_log, buy_noise_log) — see Gold's original backtest.py
+    docstring (COPPER_TRADING_LOGIC.md links back to it) for the exact shape
+    of each log entry; unchanged here.
     """
-    params = params or StrategyParams()
-    dates = signals_df.index
-    copper = signals_df["copper"]
-    score = signals_df["copper_friendly_score"]
-    new_high = signals_df["copper_new_high"]
-    above_trend_sma = signals_df["copper_above_trend_sma"] if "copper_above_trend_sma" in signals_df else pd.Series(False, index=dates)
-
-    confirm_days = max(1, int(params.signal_confirmation_days)) if params.use_whipsaw_suppression else 1
-    min_holding_days = int(params.min_holding_days) if params.use_whipsaw_suppression else 0
-
-    buy_raw = score >= params.buy_cutoff
-    sell_raw = score <= params.sell_cutoff
-    buy_confirmed = buy_raw.rolling(confirm_days, min_periods=confirm_days).sum().eq(confirm_days).fillna(False)
-    sell_confirmed = sell_raw.rolling(confirm_days, min_periods=confirm_days).sum().eq(confirm_days).fillna(False)
+    dates = signals.index
+    copper = signals["copper"]
+    # Pre-extracted as plain numpy arrays for the same performance reason as
+    # Gold's original implementation — repeated `.loc[dt]` inside a several-
+    # thousand-iteration Python loop routes through pandas' full label-lookup
+    # machinery on every access, which dominates this function's cost.
+    copper_arr = copper.to_numpy()
+    green_count_arr = signals["green_count"].to_numpy()
+    copper_sma_long_arr = signals["copper_sma_long"].to_numpy()
+    new_high_trigger_arr = signals["copper_new_52w_high"].to_numpy()
+    new_low_trigger_arr = signals["copper_new_52w_low"].to_numpy()
 
     holding = False
-    position = 0.0  # fraction of the original entry size still held
     entry_date = None
     entry_price = None
     entry_reason = None
-    equity_at_entry = None
-    realized_cash = 0.0
-    bars_since_entry = 0
-    partial_exit_done = False
-    segments: list[dict] = []  # closing events (partial + final) for the currently-open round trip
-
+    equity_at_entry = None  # strategy equity value at the moment this position was opened
     running_equity = 1.0
-    pending_buy_date = None
-    pending_buy_reason = None
-    pending_sell_date = None
-    pending_sell_reason = None
-
+    sell_noise_state = None
+    sell_noise_log: list[dict] = []
+    buy_noise_state = None
+    buy_noise_log: list[dict] = []
     trades: list[dict] = []
     equity_values = []
+    holding_values = []
 
-    def _close_remaining(dt, price, reason):
-        nonlocal holding, position, realized_cash
-        remaining = position
-        realized_cash += remaining * equity_at_entry * (price / entry_price)
-        segments.append({"date": dt, "price": price, "size": remaining, "reason": reason})
-        total_size = sum(seg["size"] for seg in segments)
-        blended_return = sum(seg["size"] * (seg["price"] / entry_price - 1.0) for seg in segments) / total_size
-        trades.append(
-            {
-                "entry_date": entry_date,
-                "entry_price": entry_price,
-                "entry_reason": entry_reason,
-                "exit_date": dt,
-                "exit_price": price,
-                "exit_reason": reason,
-                "hold_days": bars_since_entry,
-                "period_return": blended_return,
-                "open": False,
-                "partial_exits": list(segments[:-1]),
-            }
-        )
-        holding = False
-        position = 0.0
-        return realized_cash
-
-    for dt in dates:
-        s = float(score.loc[dt])
-        price = float(copper.loc[dt])
-        is_new_high = bool(new_high.loc[dt])
-        is_above_trend = bool(above_trend_sma.loc[dt]) if params.use_copper_trend else False
+    for i, dt in enumerate(dates):
+        gc = int(green_count_arr[i])
+        price = float(copper_arr[i])
 
         if not holding:
+            new_high_ready = use_new_high_trigger and bool(new_high_trigger_arr[i])
+
+            raw_entry_reason_today = None
+            if new_high_ready or gc >= buy_green_count:
+                raw_entry_reason_today = _buy_reason(
+                    gc,
+                    buy_green_count,
+                    include_new_high=new_high_ready,
+                )
+
             entry_reason_today = None
-            if params.use_new_high_buy and is_new_high:
-                entry_reason_today = "신고가 갱신"
-                pending_buy_date = None
-                pending_buy_reason = None
-            else:
-                if pending_buy_date is None and bool(buy_confirmed.loc[dt]):
-                    pending_buy_date = dt + timedelta(days=params.entry_delay_days)
-                    pending_buy_reason = _buy_reason(s, params.buy_cutoff)
-                if pending_buy_date is not None and dt >= pending_buy_date:
-                    entry_reason_today = pending_buy_reason
-                    pending_buy_date = None
-                    pending_buy_reason = None
+            if buy_noise_state is not None:
+                if raw_entry_reason_today is not None:
+                    buy_noise_state["occurrence_dates"].append(dt)
+
+                d0_date = buy_noise_state["d0_date"]
+                d0_price = buy_noise_state["d0_price"]
+                resolved = False
+                bought = False
+                band_pct = None
+                elapsed_trading_days = None
+
+                if buy_noise_state["use_daily_band"]:
+                    elapsed_trading_days = buy_noise_state["elapsed_trading_days"] + 1
+                    buy_noise_state["elapsed_trading_days"] = elapsed_trading_days
+                    if elapsed_trading_days >= NOISE_BAND_MIN_CHECK_TRADING_DAYS:
+                        band_pct = noise_band_pct(elapsed_trading_days)
+                        price_rose = price >= d0_price * (1.0 + band_pct)
+                    else:
+                        band_pct = None
+                        price_rose = False
+                    if price_rose:
+                        resolved = True
+                        bought = True
+                    elif elapsed_trading_days >= NOISE_BAND_MAX_TRADING_DAYS:
+                        resolved = True
+                        bought = False
+                else:
+                    if dt >= buy_noise_state["check_date"]:
+                        resolved = True
+                        bought = price >= d0_price * (1.0 + buy_noise_filter_rise_pct / 100.0)
+
+                if resolved:
+                    occurrence_dates = buy_noise_state["occurrence_dates"]
+                    occurrence_count = len(occurrence_dates)
+                    outcome = "bought_on_rise" if bought else "released_no_rise"
+                    buy_noise_log.append(
+                        {
+                            "d0_date": d0_date,
+                            "d0_price": d0_price,
+                            "check_date": dt,
+                            "check_price": price,
+                            "elapsed_trading_days": elapsed_trading_days,
+                            "band_pct": band_pct,
+                            "occurrence_count": occurrence_count,
+                            "outcome": outcome,
+                            "bought_date": dt if bought else None,
+                        }
+                    )
+                    if bought:
+                        base_reason = _buy_reason(gc, buy_green_count) or "관찰모드 종료"
+                        rise_actual_pct = (price / d0_price - 1.0) * 100.0
+                        if band_pct is not None:
+                            entry_reason_today = (
+                                f"{base_reason} (매수노이즈필터: D0={d0_date.date()} 종가 {d0_price:g} 대비 "
+                                f"{elapsed_trading_days}거래일차 종가 {price:g}, {rise_actual_pct:.1f}% 상승"
+                                f"[{band_pct * 100:.2f}%↑ 밴드 도달] → 매수)"
+                            )
+                        else:
+                            entry_reason_today = (
+                                f"{base_reason} (매수노이즈필터: D0={d0_date.date()} 종가 {d0_price:g} 대비 "
+                                f"D0+7일 종가 {price:g}, {rise_actual_pct:.1f}% 상승[{buy_noise_filter_rise_pct:g}%"
+                                "↑ 조건 충족] → 매수)"
+                            )
+                    buy_noise_state = None
+            elif raw_entry_reason_today is not None:
+                sma_long_today = copper_sma_long_arr[i]
+                in_downtrend_zone = (
+                    use_buy_noise_filter
+                    and not pd.isna(sma_long_today)
+                    and price < sma_long_today * (1.0 - buy_noise_filter_buffer_pct / 100.0)
+                )
+                if in_downtrend_zone:
+                    buy_noise_state = {
+                        "d0_date": dt,
+                        "d0_price": price,
+                        "use_daily_band": use_buy_daily_band_confirmation,
+                        "elapsed_trading_days": 0,
+                        "check_date": dt + timedelta(days=BUY_NOISE_FILTER_WINDOW_DAYS),
+                        "occurrence_dates": [dt],
+                    }
+                else:
+                    entry_reason_today = raw_entry_reason_today
 
             if entry_reason_today is not None:
                 holding = True
-                position = 1.0
                 entry_date = dt
                 entry_price = price
                 entry_reason = entry_reason_today
-                equity_at_entry = running_equity
-                realized_cash = 0.0
-                bars_since_entry = 0
-                partial_exit_done = False
-                segments = []
+                equity_at_entry = running_equity * (1.0 - buy_fee_pct / 100.0)
+                sell_noise_state = None  # defensive: a fresh position starts with no open episode
         else:
-            bars_since_entry += 1
-            stop_loss_hit = params.use_stop_loss and (price / entry_price - 1.0) <= params.stop_loss_pct
+            exit_reason_today = None
+            if (dt - entry_date).days >= min_holding_days:
+                new_low_ready = use_new_low_trigger and bool(new_low_trigger_arr[i])
+                if new_low_ready or gc <= sell_green_count:
+                    exit_reason_today = _sell_reason(gc, sell_green_count, include_new_low=new_low_ready)
 
-            if stop_loss_hit:
-                running_equity = _close_remaining(dt, price, f"손절(진입가 대비 {params.stop_loss_pct:.0%})")
-                pending_sell_date = None
-                pending_sell_reason = None
-            elif bars_since_entry >= min_holding_days:
-                sell_signal_today = False
-                exit_reason_today = None
-                if pending_sell_date is None and bool(sell_confirmed.loc[dt]):
-                    pending_sell_date = dt + timedelta(days=params.exit_delay_days)
-                    pending_sell_reason = _sell_reason(s, params.sell_cutoff)
-                if pending_sell_date is not None and dt >= pending_sell_date:
-                    sell_signal_today = True
-                    exit_reason_today = pending_sell_reason
-                    pending_sell_date = None
-                    pending_sell_reason = None
+            if sell_noise_state is not None:
+                if exit_reason_today is not None:
+                    sell_noise_state["occurrence_dates"].append(dt)
+                exit_reason_today = None  # suppressed unconditionally while an episode is open
 
-                if sell_signal_today:
-                    trend_shield_active = params.use_copper_trend and params.copper_trend_partial_exit and is_above_trend
-                    if trend_shield_active and not partial_exit_done and position > params.copper_trend_partial_exit_fraction:
-                        exit_size = position - params.copper_trend_partial_exit_fraction
-                        realized_cash += exit_size * equity_at_entry * (price / entry_price)
-                        segments.append(
-                            {
-                                "date": dt,
-                                "price": price,
-                                "size": exit_size,
-                                "reason": f"{exit_reason_today} (200일선 위 — {params.copper_trend_partial_exit_fraction:.0%} 유지)",
-                            }
-                        )
-                        position = params.copper_trend_partial_exit_fraction
-                        partial_exit_done = True
-                    elif trend_shield_active:
-                        pass  # already trimmed to the floor while copper stays above its 200-day SMA
+                d0_date = sell_noise_state["d0_date"]
+                d0_price = sell_noise_state["d0_price"]
+                resolved = False
+                sold = False
+                band_pct = None
+                elapsed_trading_days = None
+
+                if sell_noise_state["use_daily_band"]:
+                    elapsed_trading_days = sell_noise_state["elapsed_trading_days"] + 1
+                    sell_noise_state["elapsed_trading_days"] = elapsed_trading_days
+                    if elapsed_trading_days >= NOISE_BAND_MIN_CHECK_TRADING_DAYS:
+                        band_pct = noise_band_pct(elapsed_trading_days)
+                        price_dropped = price <= d0_price * (1.0 - band_pct)
                     else:
-                        running_equity = _close_remaining(dt, price, exit_reason_today)
+                        band_pct = None
+                        price_dropped = False
+                    if price_dropped:
+                        resolved = True
+                        sold = True
+                    elif elapsed_trading_days >= NOISE_BAND_MAX_TRADING_DAYS:
+                        resolved = True
+                        sold = False
+                else:
+                    if dt >= sell_noise_state["check_date"]:
+                        resolved = True
+                        sold = price <= d0_price * (1.0 - sell_noise_filter_drop_pct / 100.0)
 
-        equity_values.append(
-            realized_cash + position * equity_at_entry * (price / entry_price) if holding else running_equity
-        )
+                if resolved:
+                    occurrence_dates = sell_noise_state["occurrence_dates"]
+                    occurrence_count = len(occurrence_dates)
+                    outcome = "sold_on_drop" if sold else "released_no_drop"
+                    sell_noise_log.append(
+                        {
+                            "d0_date": d0_date,
+                            "d0_price": d0_price,
+                            "check_date": dt,
+                            "check_price": price,
+                            "elapsed_trading_days": elapsed_trading_days,
+                            "band_pct": band_pct,
+                            "occurrence_count": occurrence_count,
+                            "outcome": outcome,
+                            "sold_date": dt if sold else None,
+                        }
+                    )
+                    if sold:
+                        base_reason = _sell_reason(gc, sell_green_count) or "관찰모드 종료"
+                        drop_actual_pct = (price / d0_price - 1.0) * 100.0
+                        if band_pct is not None:
+                            exit_reason_today = (
+                                f"{base_reason} (노이즈필터: D0={d0_date.date()} 종가 {d0_price:g} 대비 "
+                                f"{elapsed_trading_days}거래일차 종가 {price:g}, {drop_actual_pct:.1f}% 하락"
+                                f"[{band_pct * 100:.2f}%↓ 밴드 도달] → 매도)"
+                            )
+                        else:
+                            exit_reason_today = (
+                                f"{base_reason} (노이즈필터: D0={d0_date.date()} 종가 {d0_price:g} 대비 "
+                                f"D0+7일 종가 {price:g}, {drop_actual_pct:.1f}% 하락[{sell_noise_filter_drop_pct:g}%"
+                                "↓ 조건 충족] → 매도)"
+                            )
+                    sell_noise_state = None
+            elif exit_reason_today is not None:
+                sma_long_today = copper_sma_long_arr[i]
+                in_uptrend_zone = (
+                    use_sell_noise_filter
+                    and not pd.isna(sma_long_today)
+                    and price > sma_long_today * (1.0 + sell_noise_filter_buffer_pct / 100.0)
+                )
+                if in_uptrend_zone:
+                    sell_noise_state = {
+                        "d0_date": dt,
+                        "d0_price": price,
+                        "use_daily_band": use_daily_band_confirmation,
+                        "elapsed_trading_days": 0,
+                        "check_date": dt + timedelta(days=SELL_NOISE_FILTER_WINDOW_DAYS),
+                        "occurrence_dates": [dt],
+                    }
+                    exit_reason_today = None
+
+            if exit_reason_today is not None:
+                exit_price = price
+                fee_factor = _daily_fee_decay((dt - entry_date).days, daily_holding_fee_pct)
+                equity_before_trade = running_equity
+                running_equity = (
+                    equity_at_entry * (exit_price / entry_price) * fee_factor * (1.0 - sell_fee_pct / 100.0)
+                )
+                trades.append(
+                    {
+                        "entry_date": entry_date,
+                        "entry_price": entry_price,
+                        "entry_reason": entry_reason,
+                        "exit_date": dt,
+                        "exit_price": exit_price,
+                        "exit_reason": exit_reason_today,
+                        "hold_days": (dt - entry_date).days,
+                        "gross_period_return": exit_price / entry_price - 1.0,
+                        "net_period_return": running_equity / equity_before_trade - 1.0,
+                        "open": False,
+                    }
+                )
+                holding = False
+                entry_date = None
+                entry_price = None
+                entry_reason = None
+                equity_at_entry = None
+
+        if holding:
+            fee_factor = _daily_fee_decay((dt - entry_date).days, daily_holding_fee_pct)
+            equity_values.append(equity_at_entry * (price / entry_price) * fee_factor)
+        else:
+            equity_values.append(running_equity)
+        holding_values.append(holding)
 
     if holding:
         last_dt = dates[-1]
-        last_price = float(copper.loc[last_dt])
-        total_size_so_far = sum(seg["size"] for seg in segments) + position
-        blended_return = (
-            sum(seg["size"] * (seg["price"] / entry_price - 1.0) for seg in segments)
-            + position * (last_price / entry_price - 1.0)
-        ) / total_size_so_far
+        last_price = float(copper_arr[-1])
+        fee_factor = _daily_fee_decay((last_dt - entry_date).days, daily_holding_fee_pct)
         trades.append(
             {
                 "entry_date": entry_date,
@@ -494,16 +650,59 @@ def run_backtest(
                 "exit_date": None,
                 "exit_price": last_price,
                 "exit_reason": None,
-                "hold_days": bars_since_entry,
-                "period_return": blended_return,
+                "hold_days": (last_dt - entry_date).days,
+                "gross_period_return": last_price / entry_price - 1.0,
+                "net_period_return": (equity_at_entry / running_equity) * (last_price / entry_price) * fee_factor
+                - 1.0,
                 "open": True,
-                "partial_exits": list(segments),
+            }
+        )
+        equity_values[-1] *= 1.0 - sell_fee_pct / 100.0
+
+    if sell_noise_state is not None:
+        occurrence_dates = sell_noise_state["occurrence_dates"]
+        sell_noise_log.append(
+            {
+                "d0_date": sell_noise_state["d0_date"],
+                "d0_price": sell_noise_state["d0_price"],
+                "check_date": None,
+                "check_price": None,
+                "elapsed_trading_days": (
+                    sell_noise_state["elapsed_trading_days"] if sell_noise_state["use_daily_band"] else None
+                ),
+                "band_pct": None,
+                "occurrence_count": len(occurrence_dates),
+                "outcome": "unresolved_at_window_end",
+                "sold_date": None,
+            }
+        )
+
+    if buy_noise_state is not None:
+        occurrence_dates = buy_noise_state["occurrence_dates"]
+        buy_noise_log.append(
+            {
+                "d0_date": buy_noise_state["d0_date"],
+                "d0_price": buy_noise_state["d0_price"],
+                "check_date": None,
+                "check_price": None,
+                "elapsed_trading_days": (
+                    buy_noise_state["elapsed_trading_days"] if buy_noise_state["use_daily_band"] else None
+                ),
+                "band_pct": None,
+                "occurrence_count": len(occurrence_dates),
+                "outcome": "unresolved_at_window_end",
+                "bought_date": None,
             }
         )
 
     equity_curve = pd.Series(equity_values, index=dates, name="strategy_equity")
-    bh_equity_curve = (copper / copper.iloc[0]).rename("bh_equity")
-    return trades, equity_curve, bh_equity_curve
+    elapsed_since_start = (dates - dates[0]).days.to_numpy()
+    bh_holding_fee_decay = (1.0 - daily_holding_fee_pct / 100.0) ** elapsed_since_start
+    bh_equity_curve = (copper / copper.iloc[0]) * bh_holding_fee_decay * (1.0 - buy_fee_pct / 100.0)
+    bh_equity_curve = bh_equity_curve.rename("bh_equity")
+    bh_equity_curve.iloc[-1] *= 1.0 - sell_fee_pct / 100.0
+    holding_curve = pd.Series(holding_values, index=dates, name="holding")
+    return trades, equity_curve, bh_equity_curve, holding_curve, sell_noise_log, buy_noise_log
 
 
 def compute_metrics(trades: list[dict], equity_curve: pd.Series, bh_equity_curve: pd.Series) -> dict:
@@ -520,25 +719,15 @@ def compute_metrics(trades: list[dict], equity_curve: pd.Series, bh_equity_curve
     bh_total_return = bh_final_equity - 1.0
     bh_cagr = bh_final_equity ** (365.25 / total_days) - 1.0 if total_days > 0 else None
 
-    running_max = equity_curve.cummax()
+    running_max = equity_curve.cummax().clip(lower=1.0)
     drawdown = equity_curve / running_max - 1.0
     max_drawdown = float(drawdown.min())
 
     win_rate = (
-        sum(1 for t in closed_trades if t["period_return"] > 0) / len(closed_trades)
+        sum(1 for t in closed_trades if t["net_period_return"] > 0) / len(closed_trades)
         if closed_trades
         else None
     )
-
-    # Sharpe ratio (annualized, 0% risk-free assumption — a simplification
-    # noted here rather than silently baked in): daily strategy/BH returns
-    # include flat-period zero-return days, same convention both series
-    # share, so the comparison between them stays apples-to-apples.
-    def _sharpe(curve: pd.Series) -> float | None:
-        daily_returns = curve.pct_change().dropna()
-        if len(daily_returns) < 2 or daily_returns.std() == 0:
-            return None
-        return float(daily_returns.mean() / daily_returns.std() * (252 ** 0.5))
 
     return {
         "closed_trade_count": len(closed_trades),
@@ -548,15 +737,71 @@ def compute_metrics(trades: list[dict], equity_curve: pd.Series, bh_equity_curve
         "strategy_cagr": strategy_cagr,
         "bh_cagr": bh_cagr,
         "max_drawdown": max_drawdown,
-        "sharpe_ratio": _sharpe(equity_curve),
-        "bh_sharpe_ratio": _sharpe(bh_equity_curve),
         "invested_days": invested_days,
         "total_days": total_days,
         "has_open_position": open_trade is not None,
     }
 
 
+def compute_hybrid_cagr(
+    holding_curve: pd.Series,
+    copper: pd.Series,
+    bond_annual_yield: float,
+    buy_fee_pct: float = 0.0,
+    sell_fee_pct: float = 0.0,
+    daily_holding_fee_pct: float = 0.0,
+) -> dict:
+    """The full-period CAGR variant that fills non-holding days with an
+    assumed bond return instead of leaving them flat — see Gold's original
+    docstring (unchanged mechanics, `gold` renamed `copper`)."""
+    dates = holding_curve.index
+    holding_arr = holding_curve.to_numpy()
+    copper_arr = copper.to_numpy()
+    hybrid_equity = 1.0 - buy_fee_pct / 100.0 if bool(holding_arr[0]) else 1.0
+    equity_values = [hybrid_equity]
+    non_holding_days = 0
+    total_days = 0
+    for i in range(1, len(dates)):
+        elapsed_days = (dates[i] - dates[i - 1]).days
+        total_days += elapsed_days
+        was_holding = bool(holding_arr[i - 1])
+        is_holding = bool(holding_arr[i])
+        if was_holding:
+            factor = float(copper_arr[i] / copper_arr[i - 1]) * _daily_fee_decay(
+                elapsed_days, daily_holding_fee_pct
+            )
+            if not is_holding:
+                factor *= 1.0 - sell_fee_pct / 100.0
+        else:
+            factor = (1.0 + bond_annual_yield) ** (elapsed_days / 365.25)
+            non_holding_days += elapsed_days
+            if is_holding:
+                factor *= 1.0 - buy_fee_pct / 100.0
+        hybrid_equity *= factor
+        equity_values.append(hybrid_equity)
+
+    if bool(holding_arr[-1]):
+        hybrid_equity *= 1.0 - sell_fee_pct / 100.0
+        equity_values[-1] = hybrid_equity
+
+    hybrid_total_return = hybrid_equity - 1.0
+    hybrid_cagr = hybrid_equity ** (365.25 / total_days) - 1.0 if total_days > 0 else None
+    non_holding_fraction = non_holding_days / total_days if total_days > 0 else None
+    hybrid_equity_curve = pd.Series(equity_values, index=dates, name="hybrid_equity")
+
+    return {
+        "bond_annual_yield": bond_annual_yield,
+        "hybrid_total_return": hybrid_total_return,
+        "hybrid_cagr": hybrid_cagr,
+        "non_holding_days": non_holding_days,
+        "non_holding_fraction": non_holding_fraction,
+        "hybrid_equity_curve": hybrid_equity_curve,
+    }
+
+
 def yearly_returns(equity_curve: pd.Series, bh_equity_curve: pd.Series) -> pd.DataFrame:
+    """Calendar-year returns for both curves — see Gold's original docstring
+    (unchanged mechanics)."""
     years = sorted(set(equity_curve.index.year))
     rows = []
     prev_strategy = 1.0
@@ -587,25 +832,134 @@ def yearly_returns(equity_curve: pd.Series, bh_equity_curve: pd.Series) -> pd.Da
     return pd.DataFrame(rows)
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_max_window_signals(as_of_iso: str, copper_price_basis: str) -> pd.DataFrame:
+    """fetch + compute_signals over the WIDEST window the "분석 기간(N년)"
+    slider can ever request (MAX_BACKTEST_YEARS + BUFFER_DAYS), cached only on
+    (as_of, copper_price_basis) — deliberately NOT on `years`. prepare_signals()
+    below trims this down to whatever narrower `years` was actually asked
+    for, entirely in memory (same caching strategy as Gold's own backtest.py
+    — see its docstring for the full rationale)."""
+    as_of = date.fromisoformat(as_of_iso)
+    raw = fetch_raw_data(as_of, years=MAX_BACKTEST_YEARS, copper_price_basis=copper_price_basis)
+    return compute_signals(raw)
+
+
 def prepare_signals(
-    as_of: date | None = None, years: int = BACKTEST_YEARS, params: StrategyParams | None = None
+    as_of: date | None = None,
+    years: int = BACKTEST_YEARS,
+    copper_price_basis: str = config.COPPER_PRICE_BASIS_DEFAULT,
 ) -> pd.DataFrame:
-    params = params or StrategyParams()
-    raw = fetch_raw_data(as_of, years=years, buffer_days=required_buffer_days(params))
-    sig = compute_signals(raw, params)
-    return trim_to_backtest_window(sig, as_of, years=years)
+    """The network-bound half of the pipeline: fetch + compute signals + trim
+    to the backtest window."""
+    as_of_date = as_of if as_of is not None else today_kst()
+    full_signals = _cached_max_window_signals(as_of_date.isoformat(), copper_price_basis)
+    return trim_to_backtest_window(full_signals, as_of_date, years=years)
 
 
-def simulate(signals_df: pd.DataFrame, params: StrategyParams | None = None) -> dict:
-    params = params or StrategyParams()
-    trades, equity_curve, bh_equity_curve = run_backtest(signals_df, params)
+def simulate(
+    signals: pd.DataFrame,
+    use_new_high_trigger: bool = DEFAULT_USE_FIFTY_TWO_WEEK_HIGH_TRIGGER,
+    use_new_low_trigger: bool = DEFAULT_USE_FIFTY_TWO_WEEK_LOW_TRIGGER,
+    buy_green_count: int = BUY_GREEN_COUNT,
+    sell_green_count: int = SELL_GREEN_COUNT,
+    min_holding_days: int = 0,
+    bond_annual_yield: float = DEFAULT_BOND_ANNUAL_YIELD,
+    use_sell_noise_filter: bool = True,
+    sell_noise_filter_buffer_pct: float = DEFAULT_SELL_NOISE_FILTER_BUFFER_PCT,
+    use_daily_band_confirmation: bool = DEFAULT_SELL_NOISE_USE_DAILY_BAND,
+    sell_noise_filter_drop_pct: float = DEFAULT_SELL_NOISE_FILTER_DROP_PCT,
+    use_buy_noise_filter: bool = True,
+    buy_noise_filter_buffer_pct: float = DEFAULT_BUY_NOISE_FILTER_BUFFER_PCT,
+    use_buy_daily_band_confirmation: bool = DEFAULT_BUY_NOISE_USE_DAILY_BAND,
+    buy_noise_filter_rise_pct: float = DEFAULT_BUY_NOISE_FILTER_RISE_PCT,
+    buy_fee_pct: float = 0.0,
+    sell_fee_pct: float = 0.0,
+    daily_holding_fee_pct: float = 0.0,
+) -> dict:
+    """The pure-computation half: run the trade state machine over already-
+    prepared signals and derive trades/equity curves/metrics/yearly returns."""
+    trades, equity_curve, bh_equity_curve, holding_curve, sell_noise_log, buy_noise_log = run_backtest(
+        signals,
+        use_new_high_trigger=use_new_high_trigger,
+        use_new_low_trigger=use_new_low_trigger,
+        buy_green_count=buy_green_count,
+        sell_green_count=sell_green_count,
+        min_holding_days=min_holding_days,
+        use_sell_noise_filter=use_sell_noise_filter,
+        sell_noise_filter_buffer_pct=sell_noise_filter_buffer_pct,
+        use_daily_band_confirmation=use_daily_band_confirmation,
+        sell_noise_filter_drop_pct=sell_noise_filter_drop_pct,
+        use_buy_noise_filter=use_buy_noise_filter,
+        buy_noise_filter_buffer_pct=buy_noise_filter_buffer_pct,
+        use_buy_daily_band_confirmation=use_buy_daily_band_confirmation,
+        buy_noise_filter_rise_pct=buy_noise_filter_rise_pct,
+        buy_fee_pct=buy_fee_pct,
+        sell_fee_pct=sell_fee_pct,
+        daily_holding_fee_pct=daily_holding_fee_pct,
+    )
     metrics_out = compute_metrics(trades, equity_curve, bh_equity_curve)
-    yearly = yearly_returns(equity_curve, bh_equity_curve)
+    hybrid = compute_hybrid_cagr(
+        holding_curve, signals["copper"], bond_annual_yield, buy_fee_pct, sell_fee_pct, daily_holding_fee_pct
+    )
+    hybrid_equity_curve = hybrid.pop("hybrid_equity_curve")
+    metrics_out.update(hybrid)
+    yearly = yearly_returns(hybrid_equity_curve, bh_equity_curve)
     return {
         "trades": trades,
         "equity_curve": equity_curve,
         "bh_equity_curve": bh_equity_curve,
+        "holding_curve": holding_curve,
+        "hybrid_equity_curve": hybrid_equity_curve,
         "metrics": metrics_out,
         "yearly_returns": yearly,
-        "params": params,
+        "sell_noise_log": sell_noise_log,
+        "buy_noise_log": buy_noise_log,
     }
+
+
+def run(
+    as_of: date | None = None,
+    years: int = BACKTEST_YEARS,
+    use_new_high_trigger: bool = DEFAULT_USE_FIFTY_TWO_WEEK_HIGH_TRIGGER,
+    use_new_low_trigger: bool = DEFAULT_USE_FIFTY_TWO_WEEK_LOW_TRIGGER,
+    buy_green_count: int = BUY_GREEN_COUNT,
+    sell_green_count: int = SELL_GREEN_COUNT,
+    min_holding_days: int = 0,
+    bond_annual_yield: float = DEFAULT_BOND_ANNUAL_YIELD,
+    copper_price_basis: str = config.COPPER_PRICE_BASIS_DEFAULT,
+    use_sell_noise_filter: bool = True,
+    sell_noise_filter_buffer_pct: float = DEFAULT_SELL_NOISE_FILTER_BUFFER_PCT,
+    use_daily_band_confirmation: bool = DEFAULT_SELL_NOISE_USE_DAILY_BAND,
+    sell_noise_filter_drop_pct: float = DEFAULT_SELL_NOISE_FILTER_DROP_PCT,
+    use_buy_noise_filter: bool = True,
+    buy_noise_filter_buffer_pct: float = DEFAULT_BUY_NOISE_FILTER_BUFFER_PCT,
+    use_buy_daily_band_confirmation: bool = DEFAULT_BUY_NOISE_USE_DAILY_BAND,
+    buy_noise_filter_rise_pct: float = DEFAULT_BUY_NOISE_FILTER_RISE_PCT,
+    buy_fee_pct: float = 0.0,
+    sell_fee_pct: float = 0.0,
+    daily_holding_fee_pct: float = 0.0,
+) -> dict:
+    signals = prepare_signals(as_of, years=years, copper_price_basis=copper_price_basis)
+    result = simulate(
+        signals,
+        use_new_high_trigger=use_new_high_trigger,
+        use_new_low_trigger=use_new_low_trigger,
+        buy_green_count=buy_green_count,
+        sell_green_count=sell_green_count,
+        min_holding_days=min_holding_days,
+        bond_annual_yield=bond_annual_yield,
+        use_sell_noise_filter=use_sell_noise_filter,
+        sell_noise_filter_buffer_pct=sell_noise_filter_buffer_pct,
+        use_daily_band_confirmation=use_daily_band_confirmation,
+        sell_noise_filter_drop_pct=sell_noise_filter_drop_pct,
+        use_buy_noise_filter=use_buy_noise_filter,
+        buy_noise_filter_buffer_pct=buy_noise_filter_buffer_pct,
+        use_buy_daily_band_confirmation=use_buy_daily_band_confirmation,
+        buy_noise_filter_rise_pct=buy_noise_filter_rise_pct,
+        buy_fee_pct=buy_fee_pct,
+        sell_fee_pct=sell_fee_pct,
+        daily_holding_fee_pct=daily_holding_fee_pct,
+    )
+    result["signals"] = signals
+    return result
