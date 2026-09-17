@@ -60,6 +60,18 @@ COPPER_PRICE_BASIS_DEFAULT = COPPER_PRICE_BASIS_KRX
 KRX_COPPER_ETF_TICKER = "138910"
 KRX_COPPER_ETF_EARLIEST_DATE = date(2011, 3, 15)
 
+# COPX (Global X Copper Miners ETF) — reference-only comparison instrument
+# (COPPER_TRADING_LOGIC.md 12장): same green_count(DXY/FXI)+52주 트리거
+# signal, executed against a basket of copper MINING COMPANIES' equity
+# instead of copper itself. Confirmed directly against yfinance's own price
+# history (real trading volume from day one, not a stale/placeholder
+# listing date) — 2010-04-20, not the ~2010년 11월 initially assumed.
+# KRX_COPPER_ETF_EARLIEST_DATE (2011-03-15) is the LATER of the two assets'
+# inceptions, so it — not this date — is what actually bounds the 4-way
+# comparison window.
+COPX_TICKER = "COPX"
+COPX_EARLIEST_DATE = date(2010, 4, 20)
+
 INDICATOR_META = {
     "dxy": {
         "label": "달러인덱스",

@@ -137,3 +137,12 @@ def fetch_krx_copper_etf_krw() -> pd.Series:
     if series.empty:
         raise RuntimeError("no KODEX 구리선물(H) price data returned")
     return series.rename("krx_copper_krw")
+
+
+def fetch_copx_close(start=None, end=None) -> pd.Series:
+    """Fetch COPX (Global X Copper Miners ETF, USD, NYSE Arca) daily close
+    prices — the reference-only "different traded instrument" comparison
+    covered in COPPER_TRADING_LOGIC.md 12장, NOT part of the main copper
+    price basis. Listed 2010-04-20 (config.COPX_EARLIEST_DATE, confirmed
+    against yfinance's own history)."""
+    return fetch_yfinance_close(config.COPX_TICKER, start=start, end=end)

@@ -751,3 +751,149 @@ st.caption(
     "단일 연이율을 그대로 연복리 적용한 단순 가정치이며, 실제 채권 등 투자자산의 이자율 변동· "
     "재투자·신용위험은 반영되어 있지 않습니다."
 )
+
+st.divider()
+st.subheader("🪨 참고 실험: 대체 매매수단 비교 — COPX (구리 광산주 ETF)")
+st.info(
+    "**이 섹션은 위 백테스트와 별개의 참고용 비교 실험입니다.** 위쪽 '구리 가격 기준' "
+    "선택지(① 국제 시세 / ② KODEX)와 같은 종류의 선택지가 **아닙니다** — COPX(Global X "
+    "Copper Miners ETF)는 구리 자체가 아니라 구리 광산 '기업'의 주식이라 통화(USD)·거래소"
+    "(미국)·세금 체계가 완전히 다릅니다. 신호(달러인덱스·FXI 기반 green_count, HG=F 52주 "
+    "신고가/신저가 트리거)는 위 전략과 **완전히 동일하게 재사용**하고, 실제로 사고파는 "
+    "대상만 구리 대신 COPX로 바꿨을 때 결과가 어떻게 달라지는지 보기 위한 실험입니다."
+)
+
+COPX_FEE_LABELS = {"standard": "표준 요율(0.25%)", "discount": "최저 요율(0.07%)"}
+
+
+@st.cache_data(ttl=3600, show_spinner="COPX 비교 데이터를 내려받는 중입니다...")
+def load_copx_comparison(as_of_iso: str) -> dict:
+    return backtest.run_copx_comparison(as_of=date.fromisoformat(as_of_iso))
+
+
+def _bh_stats(equity_curve: pd.Series) -> dict:
+    total_days = (equity_curve.index[-1] - equity_curve.index[0]).days
+    final_equity = float(equity_curve.iloc[-1])
+    running_max = equity_curve.cummax().clip(lower=1.0)
+    return {
+        "cagr": final_equity ** (365.25 / total_days) - 1.0 if total_days > 0 else None,
+        "total_return": final_equity - 1.0,
+        "max_drawdown": float((equity_curve / running_max - 1.0).min()),
+    }
+
+
+try:
+    copx_comparison = load_copx_comparison(as_of_date.isoformat())
+except Exception as exc:
+    st.error(f"COPX 비교 실험을 실행하지 못했습니다: {exc}")
+    copx_comparison = None
+
+if copx_comparison is not None:
+    comp_sig = copx_comparison["signals"]
+    st.caption(
+        f"비교 기간: {comp_sig.index.min().date()} ~ {comp_sig.index.max().date()} "
+        "(COPX 상장일 2010-04-20과 KODEX 구리선물(H) 상장일 2011-03-15 중 더 늦은 후자에 "
+        "맞춰, 네 시리즈가 전부 같은 구간을 공유하도록 시작일을 고정했습니다.)"
+    )
+
+    kodex_m = copx_comparison["kodex_strategy"]["metrics"]
+    kodex_bh_m = _bh_stats(copx_comparison["kodex_bh"]["equity_curve"])
+    copx_bh_m = _bh_stats(copx_comparison["copx_bh"]["equity_curve"])
+
+    rows = [
+        {
+            "구분": "구리(KODEX) 신호전략",
+            "CAGR": f"{kodex_m['strategy_cagr']:.2%}" if kodex_m["strategy_cagr"] is not None else "-",
+            "MDD": f"{kodex_m['max_drawdown']:.2%}",
+            "총수익률": f"{kodex_m['strategy_total_return']:.2%}",
+            "거래수": str(kodex_m["closed_trade_count"]),
+        },
+        {
+            "구분": "구리(KODEX) Buy & Hold",
+            "CAGR": f"{kodex_bh_m['cagr']:.2%}" if kodex_bh_m["cagr"] is not None else "-",
+            "MDD": f"{kodex_bh_m['max_drawdown']:.2%}",
+            "총수익률": f"{kodex_bh_m['total_return']:.2%}",
+            "거래수": "-",
+        },
+    ]
+    for fee_label, v in copx_comparison["copx_strategy"].items():
+        m = v["metrics"]
+        rows.append(
+            {
+                "구분": f"COPX 신호전략 ({COPX_FEE_LABELS[fee_label]})",
+                "CAGR": f"{m['strategy_cagr']:.2%}" if m["strategy_cagr"] is not None else "-",
+                "MDD": f"{m['max_drawdown']:.2%}",
+                "총수익률": f"{m['strategy_total_return']:.2%}",
+                "거래수": str(m["closed_trade_count"]),
+            }
+        )
+    rows.append(
+        {
+            "구분": "COPX Buy & Hold",
+            "CAGR": f"{copx_bh_m['cagr']:.2%}" if copx_bh_m["cagr"] is not None else "-",
+            "MDD": f"{copx_bh_m['max_drawdown']:.2%}",
+            "총수익률": f"{copx_bh_m['total_return']:.2%}",
+            "거래수": "-",
+        }
+    )
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    copx_fig = go.Figure()
+    copx_fig.add_trace(
+        go.Scatter(
+            x=copx_comparison["kodex_strategy"]["equity_curve"].index,
+            y=copx_comparison["kodex_strategy"]["equity_curve"].values,
+            name="구리(KODEX) 신호전략",
+            line=dict(color=STRATEGY_COLOR, width=2),
+        )
+    )
+    copx_fig.add_trace(
+        go.Scatter(
+            x=copx_comparison["kodex_bh"]["equity_curve"].index,
+            y=copx_comparison["kodex_bh"]["equity_curve"].values,
+            name="구리(KODEX) B&H",
+            line=dict(color=BH_COLOR, width=1.5, dash="dot"),
+        )
+    )
+    copx_fig.add_trace(
+        go.Scatter(
+            x=copx_comparison["copx_strategy"]["standard"]["equity_curve"].index,
+            y=copx_comparison["copx_strategy"]["standard"]["equity_curve"].values,
+            name="COPX 신호전략 (표준 요율)",
+            line=dict(color=BUY_COLOR, width=2),
+        )
+    )
+    copx_fig.add_trace(
+        go.Scatter(
+            x=copx_comparison["copx_bh"]["equity_curve"].index,
+            y=copx_comparison["copx_bh"]["equity_curve"].values,
+            name="COPX B&H",
+            line=dict(color=SELL_COLOR, width=1.5, dash="dot"),
+        )
+    )
+    copx_fig.update_layout(
+        height=450,
+        yaxis_title="누적 자산 배수 (시작 시점=1.0, 로그축)",
+        yaxis_type="log",
+        margin=dict(l=10, r=10, t=30, b=10),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+    )
+    st.plotly_chart(copx_fig, use_container_width=True)
+
+    st.caption(
+        "**비용·세금 구조 (KODEX 쪽 국내 ETF 수수료와 완전히 분리해 반영, 법인 투자자 기준)** — "
+        "매매수수료: 해외주식 표준요율(이벤트 미적용) 0.25% vs 메리츠 등 최저 수준 0.07%, "
+        "두 시나리오. 위 표·차트는 모두 **세전(稅前) 수익률**입니다. 법인은 개인 대상 해외주식 "
+        "양도소득세(22%) 적용 대상이 아니며, 매매차익은 법인의 다른 소득과 합산돼 법인세 "
+        "누진구조(2026년 기준 과세표준 2억원 이하 10%, 2억~200억원 20%, 200억~3,000억원 "
+        "22%, 3,000억원 초과 25%, 지방소득세 10% 별도)로 과세됩니다 — 이 투자 건 하나로 "
+        "세율이 정해지는 게 아니라 법인 전체 소득에 걸리는 문제라 백테스트 수익률 자체에는 "
+        "반영하지 않았습니다. COPX가 배당을 지급하는 경우 미국 원천징수 15%(한미 조세조약)가 "
+        "적용되며, 외국납부세액공제로 국내 법인세에서 일부 상계 가능하나 완전 면제는 아닙니다 "
+        "— 이 역시 수익률 계산에는 반영하지 않았습니다."
+    )
+    st.caption(
+        "신호(green_count·52주 트리거)는 구리(HG=F) 가격 기준으로 그대로 계산하고, 체결가·"
+        "수익률만 COPX 가격(USD)으로 교체했습니다 — 자세한 설계와 결과 해석은 "
+        "COPPER_TRADING_LOGIC.md 12장 참고."
+    )

@@ -25,12 +25,14 @@ delay/lag setting for any trigger (subject to the noise filters below
 deferring execution pending confirmation).
 """
 
+import math
 from datetime import date, timedelta
 
 import pandas as pd
 import streamlit as st
 
 from . import config
+from . import data_sources as ds
 from . import metrics
 from . import signals
 from . import timeseries as ts
@@ -211,6 +213,16 @@ DEFAULT_BOND_ANNUAL_YIELD = 0.10
 DEFAULT_BUY_FEE_PCT = 0.014  # CONFIRMED — 하나증권 2026 standard (non-event) ETF commission
 DEFAULT_SELL_FEE_PCT = 0.014  # CONFIRMED — see above
 
+# COPX (해외주식) 매매수수료 — KODEX(국내 ETF)의 0.014%와는 완전히 다른 수수료
+# 체계라 별도 상수로 분리 (COPPER_TRADING_LOGIC.md 12장). 법인(증권사 자체
+# 투자) 기준, 이벤트 미적용 상시요율: 대형 증권사 표준 0.25%, 메리츠 등 최저
+# 수준 0.07% — 두 시나리오를 나란히 비교하기 위한 상수. 양도소득세는 개인
+# 한정 규정(해외주식 22%)이라 법인엔 적용되지 않으므로 이 프로젝트는 세전
+# 수익률만 계산하고, 법인세·배당 원천징수는 COPPER_TRADING_LOGIC.md 12장의
+# 각주로만 남긴다(수익률 계산에 반영하지 않음).
+COPX_STANDARD_FEE_PCT = 0.25  # CONFIRMED — 대형 증권사 해외주식 표준(이벤트 미적용) 요율
+COPX_DISCOUNT_FEE_PCT = 0.07  # CONFIRMED — 메리츠 등 최저 수준 해외주식 요율
+
 
 def _daily_fee_decay(elapsed_days: float, daily_fee_pct: float) -> float:
     """Multiplicative factor for a holding fee expressed as a flat DAILY rate
@@ -324,8 +336,19 @@ def run_backtest(
     daily_holding_fee_pct: float = 0.0,
     execution_delay_days: int = 0,
     execution_delay_recheck: bool = False,
+    execution_price: pd.Series | None = None,
 ) -> tuple[list[dict], pd.Series, pd.Series, pd.Series, list[dict], list[dict]]:
     """Walks the signal frame day by day applying the buy/sell rules.
+
+    `execution_price` (optional, default None = use `signals["copper"]` for
+    everything, today's exact behavior): lets the SAME green_count/52-week/
+    noise-filter decision logic — all of which keep reading `signals["copper"]`
+    unchanged — fill trades against a DIFFERENT tradable asset's price
+    instead. Added for the COPX (copper-miner ETF) comparison in
+    COPPER_TRADING_LOGIC.md 12장 ("same signal, different traded instrument")
+    — must share `signals`' own index (reindex/ffill before calling).
+    `bh_equity_curve` is derived from whichever price this is, so a caller
+    gets that asset's own Buy & Hold for free alongside the strategy curve.
 
     Every trigger fills immediately at its own signal day's close by
     default — there is no delay/lag anywhere in this state machine unless
@@ -415,11 +438,13 @@ def run_backtest(
     """
     dates = signals.index
     copper = signals["copper"]
+    exec_price_series = execution_price if execution_price is not None else copper
     # Pre-extracted as plain numpy arrays for the same performance reason as
     # Gold's original implementation — repeated `.loc[dt]` inside a several-
     # thousand-iteration Python loop routes through pandas' full label-lookup
     # machinery on every access, which dominates this function's cost.
     copper_arr = copper.to_numpy()
+    exec_price_arr = exec_price_series.to_numpy()
     green_count_arr = signals["green_count"].to_numpy()
     copper_sma_long_arr = signals["copper_sma_long"].to_numpy()
     new_high_trigger_arr = signals["copper_new_52w_high"].to_numpy()
@@ -443,7 +468,8 @@ def run_backtest(
 
     for i, dt in enumerate(dates):
         gc = int(green_count_arr[i])
-        price = float(copper_arr[i])
+        price = float(copper_arr[i])  # drives every trigger/noise-filter decision below
+        exec_price = float(exec_price_arr[i])  # the only thing that changes when execution_price is set
 
         if not holding:
             new_high_ready = use_new_high_trigger and bool(new_high_trigger_arr[i])
@@ -563,7 +589,7 @@ def run_backtest(
             if entry_reason_today is not None:
                 holding = True
                 entry_date = dt
-                entry_price = price
+                entry_price = exec_price
                 entry_reason = entry_reason_today
                 equity_at_entry = running_equity * (1.0 - buy_fee_pct / 100.0)
                 sell_noise_state = None  # defensive: a fresh position starts with no open episode
@@ -679,7 +705,7 @@ def run_backtest(
                     exit_reason_today = None
 
             if exit_reason_today is not None:
-                exit_price = price
+                exit_price = exec_price
                 fee_factor = _daily_fee_decay((dt - entry_date).days, daily_holding_fee_pct)
                 equity_before_trade = running_equity
                 running_equity = (
@@ -708,14 +734,14 @@ def run_backtest(
 
         if holding:
             fee_factor = _daily_fee_decay((dt - entry_date).days, daily_holding_fee_pct)
-            equity_values.append(equity_at_entry * (price / entry_price) * fee_factor)
+            equity_values.append(equity_at_entry * (exec_price / entry_price) * fee_factor)
         else:
             equity_values.append(running_equity)
         holding_values.append(holding)
 
     if holding:
         last_dt = dates[-1]
-        last_price = float(copper_arr[-1])
+        last_price = float(exec_price_arr[-1])
         fee_factor = _daily_fee_decay((last_dt - entry_date).days, daily_holding_fee_pct)
         trades.append(
             {
@@ -773,7 +799,9 @@ def run_backtest(
     equity_curve = pd.Series(equity_values, index=dates, name="strategy_equity")
     elapsed_since_start = (dates - dates[0]).days.to_numpy()
     bh_holding_fee_decay = (1.0 - daily_holding_fee_pct / 100.0) ** elapsed_since_start
-    bh_equity_curve = (copper / copper.iloc[0]) * bh_holding_fee_decay * (1.0 - buy_fee_pct / 100.0)
+    bh_equity_curve = (
+        (exec_price_series / exec_price_series.iloc[0]) * bh_holding_fee_decay * (1.0 - buy_fee_pct / 100.0)
+    )
     bh_equity_curve = bh_equity_curve.rename("bh_equity")
     bh_equity_curve.iloc[-1] *= 1.0 - sell_fee_pct / 100.0
     holding_curve = pd.Series(holding_values, index=dates, name="holding")
@@ -1046,3 +1074,83 @@ def run(
     )
     result["signals"] = signals
     return result
+
+
+# ---------------------------------------------------------------------------
+# COPX (Global X Copper Miners ETF) comparison — COPPER_TRADING_LOGIC.md 12장.
+# Reference-only: reuses the exact same green_count(DXY/FXI)+52주 HG=F 트리거
+# signal computed above (compute_signals is called unchanged), and only
+# swaps WHAT gets bought/sold (run_backtest's execution_price parameter) —
+# never the WHY. Kept out of simulate()/run()'s copper_price_basis switch on
+# purpose (see COPPER_TRADING_LOGIC.md 12장 for why a 3rd radio option would
+# have been misleading): a copper-miner EQUITY and copper itself carry
+# different currency/exchange/tax exposure entirely, not just a different
+# copper price source.
+COPX_COMPARISON_START_DATE = config.KRX_COPPER_ETF_EARLIEST_DATE  # later of COPX's/KODEX's own inceptions
+
+
+def prepare_copx_comparison_signals(as_of: date | None = None) -> pd.DataFrame:
+    """The ② KRX-basis signal frame (green_count, 52주 트리거 — driven by DXY/
+    FXI/HG=F exactly as in the main strategy), trimmed to
+    [COPX_COMPARISON_START_DATE, as_of] and with one extra `copx` column
+    merged in for run_backtest's `execution_price`. COPX_COMPARISON_START_DATE
+    is 2011-03-15 (KODEX 138910's own listing date), not COPX's own earlier
+    2010-04-20 listing — the LATER of the two bounds what all four compared
+    series can share."""
+    as_of_date = as_of or today_kst()
+    years_needed = math.ceil((as_of_date - COPX_COMPARISON_START_DATE).days / 365.25) + 1
+
+    raw = fetch_raw_data(as_of_date, years=years_needed, copper_price_basis=config.COPPER_PRICE_BASIS_KRX)
+    full_signals = compute_signals(raw)
+    start_ts = pd.Timestamp(COPX_COMPARISON_START_DATE)
+    end_ts = pd.Timestamp(as_of_date)
+    sig_df = full_signals[(full_signals.index >= start_ts) & (full_signals.index <= end_ts)].copy()
+
+    # COPX is US-dated (NYSE Arca), same as dxy/fxi — needs the identical
+    # +1 calendar day shift fetch_backtest_frame applies to those two under
+    # the KRX basis, for the identical look-ahead-bias reason (2-1절).
+    copx_fetch_start = COPX_COMPARISON_START_DATE - timedelta(days=ts.BUFFER_DAYS)
+    copx_raw = ds.fetch_copx_close(start=copx_fetch_start, end=as_of_date + timedelta(days=1))
+    copx_shifted = copx_raw.set_axis(copx_raw.index + timedelta(days=1))
+    sig_df["copx"] = copx_shifted.reindex(sig_df.index).ffill()
+    sig_df = sig_df.dropna(subset=["copx"])
+    if sig_df.empty:
+        raise RuntimeError("no overlapping COPX/KODEX data in the requested comparison window")
+    return sig_df
+
+
+def run_copx_comparison(as_of: date | None = None) -> dict:
+    """Runs the four series COPPER_TRADING_LOGIC.md 12장 compares side by
+    side, all over the identical [COPX_COMPARISON_START_DATE, as_of] window:
+    구리(KODEX) 신호전략, 구리(KODEX) B&H, COPX 신호전략 (표준/최저 수수료 두
+    시나리오), COPX B&H. Pre-tax only — see 12장 for the corporate-tax/
+    dividend-withholding footnotes this deliberately excludes from the
+    returns themselves."""
+    sig_df = prepare_copx_comparison_signals(as_of)
+
+    kodex_trades, kodex_eq, kodex_bh, _, _, _ = run_backtest(
+        sig_df, buy_fee_pct=DEFAULT_BUY_FEE_PCT, sell_fee_pct=DEFAULT_SELL_FEE_PCT
+    )
+    kodex_metrics = compute_metrics(kodex_trades, kodex_eq, kodex_bh)
+
+    copx_variants = {}
+    copx_bh_curve = None
+    for label, fee_pct in [("standard", COPX_STANDARD_FEE_PCT), ("discount", COPX_DISCOUNT_FEE_PCT)]:
+        trades, eq, bh, _, _, _ = run_backtest(
+            sig_df, execution_price=sig_df["copx"], buy_fee_pct=fee_pct, sell_fee_pct=fee_pct
+        )
+        copx_variants[label] = {
+            "trades": trades,
+            "equity_curve": eq,
+            "metrics": compute_metrics(trades, eq, bh),
+        }
+        if label == "standard":  # BH only differs by 2 total fills across ~15y — report once
+            copx_bh_curve = bh
+
+    return {
+        "signals": sig_df,
+        "kodex_strategy": {"trades": kodex_trades, "equity_curve": kodex_eq, "metrics": kodex_metrics},
+        "kodex_bh": {"equity_curve": kodex_bh},
+        "copx_strategy": copx_variants,
+        "copx_bh": {"equity_curve": copx_bh_curve},
+    }
