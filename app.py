@@ -312,11 +312,21 @@ def render_dashboard() -> None:
     # after every rerun.
     _copper_basis_options = [config.COPPER_PRICE_BASIS_INTL, config.COPPER_PRICE_BASIS_KRX]
     st.session_state.setdefault(config.COPPER_PRICE_BASIS_STATE_KEY, config.COPPER_PRICE_BASIS_DEFAULT)
+    # The backtest page's own 3rd radio option (COPX) is page-local and never
+    # written into this shared key (see that page's module docstring) — this
+    # fallback just protects against a value this page doesn't recognize ever
+    # landing here regardless.
+    _shared_basis = st.session_state[config.COPPER_PRICE_BASIS_STATE_KEY]
+    _basis_index = (
+        _copper_basis_options.index(_shared_basis)
+        if _shared_basis in _copper_basis_options
+        else _copper_basis_options.index(config.COPPER_PRICE_BASIS_DEFAULT)
+    )
     copper_price_basis = st.radio(
         "구리 가격 기준",
         options=_copper_basis_options,
         format_func=lambda v: config.COPPER_PRICE_BASIS_LABELS[v],
-        index=_copper_basis_options.index(st.session_state[config.COPPER_PRICE_BASIS_STATE_KEY]),
+        index=_basis_index,
         key="_copper_price_basis_widget_dashboard",
         horizontal=True,
         help="유효성 검증(백테스트) 페이지 전체가 이 기준으로 계산됩니다. 이 대시보드 페이지의 "

@@ -16,6 +16,19 @@ completion report, not asked about first — see COPPER_TRADING_LOGIC.md 9-10
 Only one domestic instrument exists for copper (KODEX 구리선물(H)), so unlike
 Gold's page there is no "종목" selector — the fee section always shows that
 ETF's own two cost inputs directly.
+
+A third "구리 가격 기준" radio option, COPX (Global X Copper Miners ETF — a
+copper-MINER equity, not another copper price source), reuses the exact same
+DXY/FXI green_count + HG=F 52주 트리거 signal (computed via the ordinary ①
+국제 시세 fetch — COPX shares HG=F/DXY/FXI's own US trading calendar, so no
+KRX-style +1일 date shift applies) and only swaps what actually gets bought/
+sold, via backtest.run_backtest()'s execution_price parameter. Per explicit
+instruction, backtest.py/config.py/data_sources.py are not touched further
+for this — compute_hybrid_cagr()'s `copper` argument is already just a plain
+price series, so _simulate_with_execution_price() below reproduces
+backtest.simulate()'s own orchestration inline rather than adding a
+same-shaped wrapper there. See COPPER_TRADING_LOGIC.md 12장 for the full
+design writeup and the risk-profile mismatch this creates.
 """
 
 from datetime import date, timedelta
@@ -26,6 +39,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from copper_dashboard import backtest, config
+from copper_dashboard import data_sources as ds
 from copper_dashboard import timeseries
 from copper_dashboard.timeutil import today_kst
 
@@ -37,6 +51,17 @@ STRATEGY_HYBRID_COLOR = "#7b5ea8"
 STRATEGY_HYBRID_NONHOLDING_COLOR = "#c9bfe0"
 STRATEGY_LABEL = "신호전략"
 BH_LABEL = "Buy & Hold"
+
+# Page-local basis value — deliberately NOT in config.COPPER_PRICE_BASIS_*
+# (those two feed timeseries.fetch_backtest_frame's actual copper-price
+# fetch/date-shift logic, which COPX never goes through: it is merged in
+# here as an execution_price column on top of the ordinary ① intl signals).
+COPX_BASIS = "copx"
+COPX_BASIS_LABEL = "③ COPX (Global X Copper Miners ETF, USD, 구리 광산주)"
+COPX_FEE_SCENARIOS = {
+    "standard": ("표준 요율", backtest.COPX_STANDARD_FEE_PCT),
+    "discount": ("최저 요율", backtest.COPX_DISCOUNT_FEE_PCT),
+}
 
 DEFAULTS = {
     "bt_years": backtest.BACKTEST_YEARS,
@@ -56,6 +81,7 @@ DEFAULTS = {
     "bt_apply_fees": False,
     "bt_buy_fee_pct": backtest.DEFAULT_BUY_FEE_PCT,
     "bt_sell_fee_pct": backtest.DEFAULT_SELL_FEE_PCT,
+    "bt_copx_fee_scenario": "standard",
     "bt_execution_delay_days": 0,
     "bt_execution_delay_recheck": False,
 }
@@ -68,25 +94,46 @@ st.caption(
     "매수·매도 규칙을, 동일 시작일의 Buy & Hold와 비교합니다."
 )
 
-_copper_basis_options = [config.COPPER_PRICE_BASIS_INTL, config.COPPER_PRICE_BASIS_KRX]
+_copper_basis_options = [config.COPPER_PRICE_BASIS_INTL, config.COPPER_PRICE_BASIS_KRX, COPX_BASIS]
+_copper_basis_labels = {**config.COPPER_PRICE_BASIS_LABELS, COPX_BASIS: COPX_BASIS_LABEL}
 st.session_state.setdefault(config.COPPER_PRICE_BASIS_STATE_KEY, config.COPPER_PRICE_BASIS_DEFAULT)
+# ③ COPX is page-local — deliberately NOT written back into the shared
+# session_state key below, since the main dashboard page only ever expects
+# ①/② there (see app.py's own defensive fallback for why that matters).
+_shared_basis = st.session_state[config.COPPER_PRICE_BASIS_STATE_KEY]
+_default_basis_index = (
+    _copper_basis_options.index(_shared_basis)
+    if _shared_basis in _copper_basis_options
+    else _copper_basis_options.index(config.COPPER_PRICE_BASIS_DEFAULT)
+)
 copper_price_basis = st.radio(
     "구리 가격 기준",
     options=_copper_basis_options,
-    format_func=lambda v: config.COPPER_PRICE_BASIS_LABELS[v],
-    index=_copper_basis_options.index(st.session_state[config.COPPER_PRICE_BASIS_STATE_KEY]),
+    format_func=lambda v: _copper_basis_labels[v],
+    index=_default_basis_index,
     key="_copper_price_basis_widget_backtest",
     horizontal=True,
-    help="이 페이지 전체(이동평균·장기추세 필터·매수매도 신호·백테스트·요약지표·그래프)가 이 "
-    "기준으로 다시 계산됩니다. 대시보드 페이지와 상태를 공유하므로 여기서 바꾸면 그쪽에도 "
-    "반영됩니다.",
+    help="① · ②는 이 페이지 전체(이동평균·장기추세 필터·매수매도 신호·백테스트·요약지표·그래프)와 "
+    "대시보드 페이지가 상태를 공유합니다. ③ COPX는 이 백테스트 페이지에만 적용되고 대시보드 "
+    "선택에는 영향을 주지 않습니다 — 신호(달러인덱스·FXI, 52주 트리거)는 구리(HG=F) 가격 그대로 "
+    "계산하고, 실제 체결가·수익률 계산만 COPX(구리 광산주 ETF) 가격으로 바꿉니다.",
 )
-st.session_state[config.COPPER_PRICE_BASIS_STATE_KEY] = copper_price_basis
+if copper_price_basis != COPX_BASIS:
+    st.session_state[config.COPPER_PRICE_BASIS_STATE_KEY] = copper_price_basis
 st.caption(
     "② KODEX 구리선물(H)(138910)은 국제 구리 시세에 환율을 곱해 환산한 값이 아니라, KRX에 실제 "
     "상장된 이 ETF의 실거래가(KRW)를 그대로 사용합니다(출처: Naver 증권). 이 상품은 COMEX 구리 "
     "선물 연동지수를 환헤지(H)하여 추종합니다."
 )
+if copper_price_basis == COPX_BASIS:
+    st.warning(
+        "⚠️ **COPX는 구리 자체가 아니라 구리 광산 '기업'의 주식입니다.** 채굴 기업의 영업레버리지 "
+        "때문에 등락폭이 구리 가격보다 훨씬 크게 증폭됩니다 — 이 전략은 원래 노이즈 필터·최소 "
+        "보유일수 등으로 **하락장에서의 손실을 줄이는 방어적 설계**인데, 체결 대상을 COPX로 "
+        "바꾸면 CAGR과 MDD(최대낙폭)가 동시에 크게 커져 사실상 **고수익-고위험 성격의 다른 "
+        "전략**이 됩니다. 아래 CAGR만 보고 '더 낫다'고 판단하지 말고, 반드시 MDD를 함께 "
+        "확인하세요 — 자세한 비교와 설계 취지와의 상충 여부는 COPPER_TRADING_LOGIC.md 12장 참고."
+    )
 
 with st.expander("전략 규칙 보기"):
     st.markdown(
@@ -206,6 +253,14 @@ if copper_price_basis == config.COPPER_PRICE_BASIS_KRX and timeseries.copper_win
         f"분석 시작일이 자동으로 {config.KRX_COPPER_ETF_EARLIEST_DATE}로 조정됩니다(이동평균 "
         "계산용 사전 데이터가 짧아지는 만큼, 분석 기간 첫 구간의 180일선/장기추세 필터·"
         "52주 신고가·신저가 판정 신뢰도가 낮을 수 있습니다)."
+    )
+elif copper_price_basis == COPX_BASIS and timeseries.copper_fetch_start(
+    as_of_date, int(years), backtest.BUFFER_DAYS
+) < config.COPX_EARLIEST_DATE:
+    st.info(
+        f"COPX는 {config.COPX_EARLIEST_DATE} 이후 데이터만 존재합니다. 체결가·수익률 계산 구간이 "
+        f"자동으로 {config.COPX_EARLIEST_DATE}부터로 좁혀집니다(신호 자체는 구리(HG=F) 데이터로 "
+        "계속 계산되므로 이동평균·52주 트리거 신뢰도에는 영향이 없습니다)."
     )
 
 buy_card, sell_card = st.columns(2)
@@ -331,52 +386,87 @@ with st.expander("⚙️ 고급 설정 (최소 보유일수 등 — 기본값 �
         )
 
     st.markdown(
-        "**수수료** (② KODEX 구리선물(H) 선택 시에만 적용 — ① 국제 구리 시세는 실물이 아닌 "
-        "참고 가격이라 적용되지 않음)"
+        "**수수료** (② KODEX 구리선물(H) 또는 ③ COPX 선택 시에만 적용 — ① 국제 구리 시세는 "
+        "실물이 아닌 참고 가격이라 적용되지 않음)"
     )
     apply_fees = st.checkbox(
         "수수료 반영",
         key="bt_apply_fees",
-        disabled=copper_price_basis != config.COPPER_PRICE_BASIS_KRX,
+        disabled=copper_price_basis == config.COPPER_PRICE_BASIS_INTL,
         help="체크를 해제하면 아래 입력값과 무관하게 전부 0으로 두고 계산합니다(입력값 자체는 "
         "그대로 남아있어 다시 체크하면 복원됩니다).",
     )
-    fee_buy_col, fee_sell_col = st.columns(2)
-    with fee_buy_col:
-        buy_fee_pct = st.number_input(
-            "매수 수수료 (%, 편도, CONFIRMED)",
-            min_value=0.0, max_value=5.0, step=0.001, format="%.3f", key="bt_buy_fee_pct",
-            disabled=copper_price_basis != config.COPPER_PRICE_BASIS_KRX or not apply_fees,
-            help="매수 체결 시마다 그날 매수금액에 부과되는 1회성 수수료입니다(기본값 0.014% — "
-            "2026년 기준 국내 증권사 상시요율(이벤트 미적용) 중 최저인 하나증권 공시 요율,"
-            "1억원 이상 거래에서도 동일). 이 모델은 15년에 30건 미만(연 2건 미만)의 저빈도 매매라 "
-            "이 수수료가 누적 결과에 미치는 영향은 크지 않습니다(15년 누적 왕복 기준 1%p 미만).",
+    if copper_price_basis == COPX_BASIS:
+        copx_fee_scenario = st.radio(
+            "COPX 매매수수료 시나리오 (해외주식, 법인 투자자 기준, 편도)",
+            options=list(COPX_FEE_SCENARIOS),
+            format_func=lambda k: f"{COPX_FEE_SCENARIOS[k][0]} ({COPX_FEE_SCENARIOS[k][1]:g}%)",
+            key="bt_copx_fee_scenario",
+            disabled=not apply_fees,
+            horizontal=True,
+            help="표준 요율: 대형 증권사 해외주식 표준(이벤트 미적용) 요율. 최저 요율: 메리츠 등"
+            "최저 수준 해외주식 요율. KODEX(국내 ETF, 0.014%)와는 완전히 다른 수수료 체계라 "
+            "별도로 분리했습니다.",
         )
-    with fee_sell_col:
-        sell_fee_pct = st.number_input(
-            "매도 수수료 (%, 편도, CONFIRMED)",
-            min_value=0.0, max_value=5.0, step=0.001, format="%.3f", key="bt_sell_fee_pct",
-            disabled=copper_price_basis != config.COPPER_PRICE_BASIS_KRX or not apply_fees,
-            help="매도 체결 시마다 그날 매도금액에 부과되는 1회성 수수료입니다. Buy & Hold는 "
-            "분석기간 종료 시점에 전량 매도한다고 가정해 이 수수료를 마지막 날 1회 반영합니다.",
+        buy_fee_pct = sell_fee_pct = COPX_FEE_SCENARIOS[copx_fee_scenario][1]
+        st.caption(
+            "**세금 — 법인 투자자 기준이라 개인 양도소득세(22%)는 적용되지 않습니다.** 매매차익은 "
+            "법인의 다른 소득과 합산되어 법인세 누진구조(2026년 기준 과세표준 2억원 이하 10%, "
+            "2억~200억원 20%, 200억~3,000억원 22%, 3,000억원 초과 25%, 지방소득세 10% 별도)로 "
+            "과세되며, 이 투자 한 건만으로 세율이 정해지는 게 아니라 법인 전체 소득에 걸리는 "
+            "문제라 아래 결과는 모두 **세전(稅前) 수익률**입니다. COPX가 배당을 지급하는 경우 "
+            "미국 원천징수 15%(한미 조세조약)가 적용되고 외국납부세액공제로 일부 상계 가능하나 "
+            "완전 면제는 아닙니다 — 이 역시 반영하지 않았습니다. 자세한 내용은 "
+            "COPPER_TRADING_LOGIC.md 12장 참고."
         )
-    st.caption(
-        "KODEX 구리선물(H)의 연간 총보수(0.68%, CONFIRMED — 삼성자산운용 공식 펀드 팩트시트 "
-        "기준)는 여기서 별도로 차감하지 **않습니다**. ② 기준이 쓰는 가격은 이론가가 아니라 이 "
-        "ETF의 실제 관측 체결가이며, 펀드 총보수는 매일 펀드 자산에서 차감되어 이미 그 관측가"
-        "(NAV를 근접 추종)에 반영돼 있습니다 — 여기에 또 일할 차감하면 같은 비용을 이중으로 "
-        "빼는 것이 되어(2026-09-16 발견 및 수정), 매수/매도 수수료만 명시적으로 반영하고 총보수는 "
-        "관측 가격에 맡깁니다. 자세한 내용은 COPPER_TRADING_LOGIC.md 6-2장 참고."
-    )
+    else:
+        fee_buy_col, fee_sell_col = st.columns(2)
+        with fee_buy_col:
+            buy_fee_pct = st.number_input(
+                "매수 수수료 (%, 편도, CONFIRMED)",
+                min_value=0.0, max_value=5.0, step=0.001, format="%.3f", key="bt_buy_fee_pct",
+                disabled=copper_price_basis != config.COPPER_PRICE_BASIS_KRX or not apply_fees,
+                help="매수 체결 시마다 그날 매수금액에 부과되는 1회성 수수료입니다(기본값 0.014% — "
+                "2026년 기준 국내 증권사 상시요율(이벤트 미적용) 중 최저인 하나증권 공시 요율,"
+                "1억원 이상 거래에서도 동일). 이 모델은 15년에 30건 미만(연 2건 미만)의 저빈도 매매라 "
+                "이 수수료가 누적 결과에 미치는 영향은 크지 않습니다(15년 누적 왕복 기준 1%p 미만).",
+            )
+        with fee_sell_col:
+            sell_fee_pct = st.number_input(
+                "매도 수수료 (%, 편도, CONFIRMED)",
+                min_value=0.0, max_value=5.0, step=0.001, format="%.3f", key="bt_sell_fee_pct",
+                disabled=copper_price_basis != config.COPPER_PRICE_BASIS_KRX or not apply_fees,
+                help="매도 체결 시마다 그날 매도금액에 부과되는 1회성 수수료입니다. Buy & Hold는 "
+                "분석기간 종료 시점에 전량 매도한다고 가정해 이 수수료를 마지막 날 1회 반영합니다.",
+            )
+        st.caption(
+            "KODEX 구리선물(H)의 연간 총보수(0.68%, CONFIRMED — 삼성자산운용 공식 펀드 팩트시트 "
+            "기준)는 여기서 별도로 차감하지 **않습니다**. ② 기준이 쓰는 가격은 이론가가 아니라 이 "
+            "ETF의 실제 관측 체결가이며, 펀드 총보수는 매일 펀드 자산에서 차감되어 이미 그 관측가"
+            "(NAV를 근접 추종)에 반영돼 있습니다 — 여기에 또 일할 차감하면 같은 비용을 이중으로 "
+            "빼는 것이 되어(2026-09-16 발견 및 수정), 매수/매도 수수료만 명시적으로 반영하고 총보수는 "
+            "관측 가격에 맡깁니다. 자세한 내용은 COPPER_TRADING_LOGIC.md 6-2장 참고."
+        )
 
 bond_yield_pct = float(st.session_state["bt_bond_yield_pct"])
 
 
 @st.cache_data(ttl=3600, show_spinner="데이터를 내려받는 중입니다...")
 def load_signals(as_of_iso: str, years: int, copper_price_basis: str) -> pd.DataFrame:
+    # ③ COPX signals are computed exactly like ① intl (COPX shares HG=F/DXY/
+    # FXI's own US trading calendar, so no KRX-style date shift applies) —
+    # only load_copx_execution_price's merged-in "copx" column differs.
+    fetch_basis = config.COPPER_PRICE_BASIS_INTL if copper_price_basis == COPX_BASIS else copper_price_basis
     return backtest.prepare_signals(
-        as_of=date.fromisoformat(as_of_iso), years=years, copper_price_basis=copper_price_basis
+        as_of=date.fromisoformat(as_of_iso), years=years, copper_price_basis=fetch_basis
     )
+
+
+@st.cache_data(ttl=3600, show_spinner="COPX 데이터를 내려받는 중입니다...")
+def load_copx_execution_price(as_of_iso: str, years: int) -> pd.Series:
+    as_of_val = date.fromisoformat(as_of_iso)
+    fetch_start = timeseries.copper_fetch_start(as_of_val, years, backtest.BUFFER_DAYS)
+    return ds.fetch_copx_close(start=fetch_start, end=as_of_val + timedelta(days=1))
 
 
 def _format_copper_price(value: float, basis: str = copper_price_basis) -> str:
@@ -385,13 +475,54 @@ def _format_copper_price(value: float, basis: str = copper_price_basis) -> str:
     return f"${value:,.4f}"
 
 
-_fees_active = apply_fees and copper_price_basis == config.COPPER_PRICE_BASIS_KRX
+def _simulate_with_execution_price(
+    signals_df: pd.DataFrame,
+    execution_price: pd.Series,
+    bond_annual_yield: float,
+    buy_fee_pct: float,
+    sell_fee_pct: float,
+    **run_backtest_kwargs,
+) -> dict:
+    """Reproduces backtest.simulate()'s own orchestration (run_backtest ->
+    compute_metrics -> compute_hybrid_cagr -> yearly_returns) inline, so ③
+    COPX gets the exact same result shape as ①/② without adding a same-
+    shaped wrapper to backtest.py itself — compute_hybrid_cagr's `copper`
+    argument is already just a plain price series, so passing COPX's here
+    instead needs no change there either."""
+    trades, equity_curve, bh_equity_curve, holding_curve, sell_noise_log, buy_noise_log = backtest.run_backtest(
+        signals_df,
+        buy_fee_pct=buy_fee_pct,
+        sell_fee_pct=sell_fee_pct,
+        execution_price=execution_price,
+        **run_backtest_kwargs,
+    )
+    metrics_out = backtest.compute_metrics(trades, equity_curve, bh_equity_curve)
+    hybrid = backtest.compute_hybrid_cagr(holding_curve, execution_price, bond_annual_yield, buy_fee_pct, sell_fee_pct)
+    hybrid_equity_curve = hybrid.pop("hybrid_equity_curve")
+    metrics_out.update(hybrid)
+    yearly = backtest.yearly_returns(hybrid_equity_curve, bh_equity_curve)
+    return {
+        "trades": trades,
+        "equity_curve": equity_curve,
+        "bh_equity_curve": bh_equity_curve,
+        "holding_curve": holding_curve,
+        "hybrid_equity_curve": hybrid_equity_curve,
+        "metrics": metrics_out,
+        "yearly_returns": yearly,
+        "sell_noise_log": sell_noise_log,
+        "buy_noise_log": buy_noise_log,
+    }
+
+
+_fees_active = apply_fees and copper_price_basis != config.COPPER_PRICE_BASIS_INTL
 effective_buy_fee_pct = float(buy_fee_pct) if _fees_active else 0.0
 effective_sell_fee_pct = float(sell_fee_pct) if _fees_active else 0.0
 # No daily_holding_fee_pct here: KODEX 구리선물(H)'s 총보수 is already embedded
 # in the ETF's observed market price under basis ②, so charging it again as a
 # separate daily deduction would double-count it — see backtest.py's fee
-# comment block and COPPER_TRADING_LOGIC.md 6-2장.
+# comment block and COPPER_TRADING_LOGIC.md 6-2장. COPX pays no comparable
+# embedded fund cost (it's the mining companies' own listed equity, not a
+# fund tracking an index), so there is nothing to double-count there either.
 
 _shared_sim_kwargs = dict(
     use_new_high_trigger=use_new_high_trigger,
@@ -410,22 +541,38 @@ _shared_sim_kwargs = dict(
 
 try:
     signals = load_signals(as_of_date.isoformat(), int(years), copper_price_basis)
-    result = backtest.simulate(
-        signals,
-        **_shared_sim_kwargs,
-        buy_green_count=int(buy_green_count),
-        sell_green_count=int(sell_green_count),
-        buy_fee_pct=effective_buy_fee_pct,
-        sell_fee_pct=effective_sell_fee_pct,
-    )
-    result_gross = backtest.simulate(
-        signals,
-        **_shared_sim_kwargs,
-        buy_green_count=int(buy_green_count),
-        sell_green_count=int(sell_green_count),
-        buy_fee_pct=0.0,
-        sell_fee_pct=0.0,
-    )
+    if copper_price_basis == COPX_BASIS:
+        copx_raw = load_copx_execution_price(as_of_date.isoformat(), int(years))
+        signals = signals.copy()
+        signals["copx"] = copx_raw.reindex(signals.index).ffill()
+        signals = signals.dropna(subset=["copx"])
+        _rb_kwargs = {k: v for k, v in _shared_sim_kwargs.items() if k != "bond_annual_yield"}
+        result = _simulate_with_execution_price(
+            signals, signals["copx"], _shared_sim_kwargs["bond_annual_yield"],
+            effective_buy_fee_pct, effective_sell_fee_pct,
+            buy_green_count=int(buy_green_count), sell_green_count=int(sell_green_count), **_rb_kwargs,
+        )
+        result_gross = _simulate_with_execution_price(
+            signals, signals["copx"], _shared_sim_kwargs["bond_annual_yield"], 0.0, 0.0,
+            buy_green_count=int(buy_green_count), sell_green_count=int(sell_green_count), **_rb_kwargs,
+        )
+    else:
+        result = backtest.simulate(
+            signals,
+            **_shared_sim_kwargs,
+            buy_green_count=int(buy_green_count),
+            sell_green_count=int(sell_green_count),
+            buy_fee_pct=effective_buy_fee_pct,
+            sell_fee_pct=effective_sell_fee_pct,
+        )
+        result_gross = backtest.simulate(
+            signals,
+            **_shared_sim_kwargs,
+            buy_green_count=int(buy_green_count),
+            sell_green_count=int(sell_green_count),
+            buy_fee_pct=0.0,
+            sell_fee_pct=0.0,
+        )
 except Exception as exc:
     st.error(f"백테스트를 실행하지 못했습니다: {exc}")
     result = None
@@ -442,6 +589,12 @@ if result is not None:
 
     bh_equity_gross = result_gross["bh_equity_curve"]
     hybrid_equity_gross = result_gross["hybrid_equity_curve"]
+
+    def _max_drawdown(curve: pd.Series) -> float:
+        running_max = curve.cummax().clip(lower=1.0)
+        return float((curve / running_max - 1.0).min())
+
+    bh_max_drawdown = _max_drawdown(bh_equity)
 
     start_date = equity.index[0].date()
     end_date = equity.index[-1].date()
@@ -473,6 +626,11 @@ with bh_col:
     st.markdown(f"###### ② {BH_LABEL}")
     st.metric("누적수익률", f"{m['bh_total_return']:.1%}" if m is not None else "-")
     st.metric("연환산수익률(CAGR)", f"{m['bh_cagr']:.1%}" if m is not None else "-")
+    st.metric(
+        "최대낙폭(MDD)",
+        f"{bh_max_drawdown:.1%}" if m is not None else "-",
+        help="분석 기간 중 고점 대비 최대 하락폭.",
+    )
 with strategy_held_col:
     st.markdown(f"###### ③ {STRATEGY_LABEL} (보유기간)")
     st.metric(
@@ -485,6 +643,12 @@ with strategy_held_col:
         f"{m['strategy_cagr']:.1%}" if m is not None and m["strategy_cagr"] is not None else "-",
         help="실제로 구리를 보유했던 기간의 일수만 분모로 사용한 연환산수익률 — 분모가 달라 "
         "Buy & Hold의 CAGR과 직접 비교할 수 없습니다.",
+    )
+    st.metric(
+        "최대낙폭(MDD)",
+        f"{m['max_drawdown']:.1%}" if m is not None else "-",
+        help="분석 기간 중 고점 대비 최대 하락폭 — CAGR이 높아도 MDD가 함께 커졌다면 위험도 "
+        "같이 커진 것이니 반드시 같이 확인하세요(③ COPX 기준 참고).",
     )
 with strategy_hybrid_col:
     st.markdown(f"###### ④ {STRATEGY_LABEL} (미보유기간 기대수익률 포함)")
@@ -603,8 +767,8 @@ if show_strategy_line:
             )
     marker_df = pd.DataFrame(marker_rows)
 
-    _price_tooltip_format = "$,.4f" if copper_price_basis == config.COPPER_PRICE_BASIS_INTL else ",.0f"
-    _price_tooltip_title = "체결가" if copper_price_basis == config.COPPER_PRICE_BASIS_INTL else "체결가 (원)"
+    _price_tooltip_format = ",.0f" if copper_price_basis == config.COPPER_PRICE_BASIS_KRX else "$,.4f"
+    _price_tooltip_title = "체결가 (원)" if copper_price_basis == config.COPPER_PRICE_BASIS_KRX else "체결가"
 
     if not marker_df.empty:
         for label, color, symbol in (("매수", BUY_COLOR, "triangle-up"), ("매도", SELL_COLOR, "triangle-down")):
@@ -746,7 +910,10 @@ else:
 st.caption(
     "⚠️ 본 백테스트는 과거 데이터에 기반한 시뮬레이션 결과이며 미래 성과를 보장하지 않습니다. "
     "② KODEX 구리선물(H) 기준일 때는 매수·매도 수수료와 총보수가 반영되지만, 세금·슬리피지는 "
-    "여전히 반영되어 있지 않고, 표본 기간이 짧아 과최적화(overfitting) 위험이 있습니다. "
+    "여전히 반영되어 있지 않고, 표본 기간이 짧아 과최적화(overfitting) 위험이 있습니다. ③ COPX "
+    "기준일 때는 매수·매도 수수료만 반영되며 세금(법인세·배당 원천징수)은 반영하지 않은 "
+    "세전 수익률입니다 — COPX는 구리 광산 기업 주식이라 등락폭이 구리 자체보다 크게 증폭될 "
+    "수 있다는 점도 함께 감안하세요(자세한 내용은 COPPER_TRADING_LOGIC.md 12장 참고). "
     "'④ 신호전략 (미보유기간 기대수익률 포함)' 그룹의 기대수익률은 사용자가 입력한 "
     "단일 연이율을 그대로 연복리 적용한 단순 가정치이며, 실제 채권 등 투자자산의 이자율 변동· "
     "재투자·신용위험은 반영되어 있지 않습니다."
