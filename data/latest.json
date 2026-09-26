@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-09-26T07:12:16.218156+09:00",
+  "generated_at": "2026-09-27T07:11:49.115426+09:00",
   "requested_as_of": null,
   "as_of": "2026-09-25",
   "indicator_order": [
@@ -12,35 +12,35 @@
       "source": "Yahoo Finance (DX-Y.NYB)",
       "as_of": "2026-09-25",
       "prev_close": {
-        "value": 101.035,
-        "display": "101.04"
+        "value": 100.97,
+        "display": "100.97"
       },
       "sma": {
         "60": {
-          "ma_value": 99.7464,
-          "ma_display": "99.75",
+          "ma_value": 99.7449,
+          "ma_display": "99.74",
           "status_text": "상향 돌파",
-          "display": "99.75 (종가 101.04 → 상향 돌파)",
+          "display": "99.74 (종가 100.97 → 상향 돌파)",
           "streak": 8,
           "breakout": true,
           "streak_display": "8일째",
           "copper_friendly": false
         },
         "20": {
-          "ma_value": 100.0096,
-          "ma_display": "100.01",
+          "ma_value": 100.005,
+          "ma_display": "100.00",
           "status_text": "상향 돌파",
-          "display": "100.01 (종가 101.04 → 상향 돌파)",
+          "display": "100.00 (종가 100.97 → 상향 돌파)",
           "streak": 10,
           "breakout": true,
           "streak_display": "10일째",
           "copper_friendly": false
         },
         "7": {
-          "ma_value": 100.891,
-          "ma_display": "100.89",
+          "ma_value": 100.878,
+          "ma_display": "100.88",
           "status_text": "상향 돌파",
-          "display": "100.89 (종가 101.04 → 상향 돌파)",
+          "display": "100.88 (종가 100.97 → 상향 돌파)",
           "streak": 12,
           "breakout": true,
           "streak_display": "12일째",
