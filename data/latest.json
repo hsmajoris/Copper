@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-10-04T11:52:32.629141+09:00",
+  "generated_at": "2026-10-05T09:30:52.070645+09:00",
   "requested_as_of": null,
-  "as_of": "2026-10-02",
+  "as_of": "2026-10-04",
   "indicator_order": [
     "dxy",
     "fxi"
@@ -10,40 +10,40 @@
     "dxy": {
       "label": "달러인덱스",
       "source": "Yahoo Finance (DX-Y.NYB)",
-      "as_of": "2026-10-02",
+      "as_of": "2026-10-04",
       "prev_close": {
-        "value": 101.93,
-        "display": "101.93"
+        "value": 101.95,
+        "display": "101.95"
       },
       "sma": {
         "60": {
-          "ma_value": 99.8867,
-          "ma_display": "99.89",
+          "ma_value": 99.9405,
+          "ma_display": "99.94",
           "status_text": "상향 돌파",
-          "display": "99.89 (종가 101.93 → 상향 돌파)",
-          "streak": 13,
+          "display": "99.94 (종가 101.95 → 상향 돌파)",
+          "streak": 14,
           "breakout": true,
-          "streak_display": "13일째",
+          "streak_display": "14일째",
           "copper_friendly": false
         },
         "20": {
-          "ma_value": 100.82,
-          "ma_display": "100.82",
+          "ma_value": 100.986,
+          "ma_display": "100.99",
           "status_text": "상향 돌파",
-          "display": "100.82 (종가 101.93 → 상향 돌파)",
-          "streak": 15,
+          "display": "100.99 (종가 101.95 → 상향 돌파)",
+          "streak": 16,
           "breakout": true,
-          "streak_display": "15일째",
+          "streak_display": "16일째",
           "copper_friendly": false
         },
         "7": {
-          "ma_value": 101.61,
-          "ma_display": "101.61",
+          "ma_value": 101.6667,
+          "ma_display": "101.67",
           "status_text": "상향 돌파",
-          "display": "101.61 (종가 101.93 → 상향 돌파)",
-          "streak": 17,
+          "display": "101.67 (종가 101.95 → 상향 돌파)",
+          "streak": 18,
           "breakout": true,
-          "streak_display": "17일째",
+          "streak_display": "18일째",
           "copper_friendly": false
         }
       }
