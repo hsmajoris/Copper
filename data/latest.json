@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-10-09T10:47:25.245294+09:00",
+  "generated_at": "2026-10-10T10:33:51.274037+09:00",
   "requested_as_of": null,
-  "as_of": "2026-10-08",
+  "as_of": "2026-10-09",
   "indicator_order": [
     "dxy",
     "fxi"
@@ -10,82 +10,82 @@
     "dxy": {
       "label": "달러인덱스",
       "source": "Yahoo Finance (DX-Y.NYB)",
-      "as_of": "2026-10-08",
+      "as_of": "2026-10-09",
       "prev_close": {
-        "value": 102.005,
-        "display": "102.00"
+        "value": 102.231,
+        "display": "102.23"
       },
       "sma": {
         "60": {
-          "ma_value": 100.0983,
-          "ma_display": "100.10",
+          "ma_value": 100.1577,
+          "ma_display": "100.16",
           "status_text": "상향 돌파",
-          "display": "100.10 (종가 102.00 → 상향 돌파)",
-          "streak": 17,
+          "display": "100.16 (종가 102.23 → 상향 돌파)",
+          "streak": 18,
           "breakout": true,
-          "streak_display": "17일째",
+          "streak_display": "18일째",
           "copper_friendly": false
         },
         "20": {
-          "ma_value": 101.4775,
-          "ma_display": "101.48",
+          "ma_value": 101.5367,
+          "ma_display": "101.54",
           "status_text": "상향 돌파",
-          "display": "101.48 (종가 102.00 → 상향 돌파)",
-          "streak": 19,
+          "display": "101.54 (종가 102.23 → 상향 돌파)",
+          "streak": 20,
           "breakout": true,
-          "streak_display": "19일째",
+          "streak_display": "20일째",
           "copper_friendly": false
         },
         "7": {
-          "ma_value": 102.035,
-          "ma_display": "102.03",
-          "status_text": "이평선 아래",
-          "display": "102.03 (종가 102.00 → 이평선 아래)",
-          "streak": 0,
-          "breakout": false,
-          "streak_display": "",
-          "copper_friendly": true
+          "ma_value": 102.1222,
+          "ma_display": "102.12",
+          "status_text": "상향 돌파",
+          "display": "102.12 (종가 102.23 → 상향 돌파)",
+          "streak": 3,
+          "breakout": true,
+          "streak_display": "3일째",
+          "copper_friendly": false
         }
       }
     },
     "fxi": {
       "label": "FXI (iShares China Large-Cap ETF)",
       "source": "Yahoo Finance (FXI)",
-      "as_of": "2026-10-08",
+      "as_of": "2026-10-09",
       "prev_close": {
-        "value": 33.45,
-        "display": "$33.45"
+        "value": 34.24,
+        "display": "$34.24"
       },
       "sma": {
         "60": {
-          "ma_value": 34.7805,
-          "ma_display": "$34.78",
+          "ma_value": 34.7281,
+          "ma_display": "$34.73",
           "status_text": "이평선 아래",
-          "display": "$34.78 (종가 $33.45 → 이평선 아래)",
+          "display": "$34.73 (종가 $34.24 → 이평선 아래)",
           "streak": 0,
           "breakout": false,
           "streak_display": "",
           "copper_friendly": false
         },
         "20": {
-          "ma_value": 34.0086,
-          "ma_display": "$34.01",
-          "status_text": "이평선 아래",
-          "display": "$34.01 (종가 $33.45 → 이평선 아래)",
-          "streak": 0,
-          "breakout": false,
-          "streak_display": "",
-          "copper_friendly": false
+          "ma_value": 34.024,
+          "ma_display": "$34.02",
+          "status_text": "상향 돌파",
+          "display": "$34.02 (종가 $34.24 → 상향 돌파)",
+          "streak": 1,
+          "breakout": true,
+          "streak_display": "1일째",
+          "copper_friendly": true
         },
         "7": {
-          "ma_value": 33.536,
-          "ma_display": "$33.54",
-          "status_text": "이평선 아래",
-          "display": "$33.54 (종가 $33.45 → 이평선 아래)",
-          "streak": 0,
-          "breakout": false,
-          "streak_display": "",
-          "copper_friendly": false
+          "ma_value": 33.746,
+          "ma_display": "$33.75",
+          "status_text": "상향 돌파",
+          "display": "$33.75 (종가 $34.24 → 상향 돌파)",
+          "streak": 1,
+          "breakout": true,
+          "streak_display": "1일째",
+          "copper_friendly": true
         }
       }
     }
