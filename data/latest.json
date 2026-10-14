@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-10-13T11:52:54.870440+09:00",
+  "generated_at": "2026-10-14T09:56:06.744068+09:00",
   "requested_as_of": null,
-  "as_of": "2026-10-12",
+  "as_of": "2026-10-13",
   "indicator_order": [
     "dxy",
     "fxi"
@@ -10,41 +10,41 @@
     "dxy": {
       "label": "달러인덱스",
       "source": "Yahoo Finance (DX-Y.NYB)",
-      "as_of": "2026-10-12",
+      "as_of": "2026-10-13",
       "prev_close": {
-        "value": 102.421,
-        "display": "102.42"
+        "value": 102.16,
+        "display": "102.16"
       },
       "sma": {
         "60": {
-          "ma_value": 100.229,
-          "ma_display": "100.23",
+          "ma_value": 100.2937,
+          "ma_display": "100.29",
           "status_text": "상향 돌파",
-          "display": "100.23 (종가 102.42 → 상향 돌파)",
-          "streak": 19,
+          "display": "100.29 (종가 102.16 → 상향 돌파)",
+          "streak": 20,
           "breakout": true,
-          "streak_display": "19일째",
+          "streak_display": "20일째",
           "copper_friendly": false
         },
         "20": {
-          "ma_value": 101.7444,
-          "ma_display": "101.74",
+          "ma_value": 101.8314,
+          "ma_display": "101.83",
           "status_text": "상향 돌파",
-          "display": "101.74 (종가 102.42 → 상향 돌파)",
-          "streak": 21,
+          "display": "101.83 (종가 102.16 → 상향 돌파)",
+          "streak": 22,
           "breakout": true,
-          "streak_display": "21일째",
+          "streak_display": "22일째",
           "copper_friendly": false
         },
         "7": {
-          "ma_value": 102.1682,
-          "ma_display": "102.17",
-          "status_text": "상향 돌파",
-          "display": "102.17 (종가 102.42 → 상향 돌파)",
-          "streak": 4,
-          "breakout": true,
-          "streak_display": "4일째",
-          "copper_friendly": false
+          "ma_value": 102.266,
+          "ma_display": "102.27",
+          "status_text": "이평선 아래",
+          "display": "102.27 (종가 102.16 → 이평선 아래)",
+          "streak": 0,
+          "breakout": false,
+          "streak_display": "",
+          "copper_friendly": true
         }
       }
     },
