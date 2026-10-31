@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-10-30T10:39:03.263459+09:00",
+  "generated_at": "2026-10-31T10:26:32.725003+09:00",
   "requested_as_of": null,
-  "as_of": "2026-10-29",
+  "as_of": "2026-10-30",
   "indicator_order": [
     "dxy",
     "fxi"
@@ -10,37 +10,37 @@
     "dxy": {
       "label": "달러인덱스",
       "source": "Yahoo Finance (DX-Y.NYB)",
-      "as_of": "2026-10-29",
+      "as_of": "2026-10-30",
       "prev_close": {
-        "value": 101.64,
-        "display": "101.64"
+        "value": 101.964,
+        "display": "101.96"
       },
       "sma": {
         "60": {
-          "ma_value": 101.0163,
-          "ma_display": "101.02",
+          "ma_value": 101.0845,
+          "ma_display": "101.08",
           "status_text": "상향 돌파",
-          "display": "101.02 (종가 101.64 → 상향 돌파)",
-          "streak": 32,
+          "display": "101.08 (종가 101.96 → 상향 돌파)",
+          "streak": 33,
           "breakout": true,
-          "streak_display": "32일째",
+          "streak_display": "33일째",
           "copper_friendly": false
         },
         "20": {
-          "ma_value": 102.0121,
-          "ma_display": "102.01",
+          "ma_value": 102.0356,
+          "ma_display": "102.04",
           "status_text": "이평선 아래",
-          "display": "102.01 (종가 101.64 → 이평선 아래)",
+          "display": "102.04 (종가 101.96 → 이평선 아래)",
           "streak": 0,
           "breakout": false,
           "streak_display": "",
           "copper_friendly": true
         },
         "7": {
-          "ma_value": 101.984,
-          "ma_display": "101.98",
+          "ma_value": 102.0948,
+          "ma_display": "102.09",
           "status_text": "이평선 아래",
-          "display": "101.98 (종가 101.64 → 이평선 아래)",
+          "display": "102.09 (종가 101.96 → 이평선 아래)",
           "streak": 0,
           "breakout": false,
           "streak_display": "",
@@ -51,40 +51,40 @@
     "fxi": {
       "label": "FXI (iShares China Large-Cap ETF)",
       "source": "Yahoo Finance (FXI)",
-      "as_of": "2026-10-29",
+      "as_of": "2026-10-30",
       "prev_close": {
-        "value": 32.69,
-        "display": "$32.69"
+        "value": 33.08,
+        "display": "$33.08"
       },
       "sma": {
         "60": {
-          "ma_value": 34.0247,
-          "ma_display": "$34.02",
+          "ma_value": 33.9714,
+          "ma_display": "$33.97",
           "status_text": "이평선 아래",
-          "display": "$34.02 (종가 $32.69 → 이평선 아래)",
+          "display": "$33.97 (종가 $33.08 → 이평선 아래)",
           "streak": 0,
           "breakout": false,
           "streak_display": "",
           "copper_friendly": false
         },
         "20": {
-          "ma_value": 33.2264,
-          "ma_display": "$33.23",
+          "ma_value": 33.2167,
+          "ma_display": "$33.22",
           "status_text": "이평선 아래",
-          "display": "$33.23 (종가 $32.69 → 이평선 아래)",
+          "display": "$33.22 (종가 $33.08 → 이평선 아래)",
           "streak": 0,
           "breakout": false,
           "streak_display": "",
           "copper_friendly": false
         },
         "7": {
-          "ma_value": 32.494,
-          "ma_display": "$32.49",
+          "ma_value": 32.648,
+          "ma_display": "$32.65",
           "status_text": "상향 돌파",
-          "display": "$32.49 (종가 $32.69 → 상향 돌파)",
-          "streak": 2,
+          "display": "$32.65 (종가 $33.08 → 상향 돌파)",
+          "streak": 3,
           "breakout": true,
-          "streak_display": "2일째",
+          "streak_display": "3일째",
           "copper_friendly": true
         }
       }
