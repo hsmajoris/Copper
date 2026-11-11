@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-11-10T12:58:48.569897+09:00",
+  "generated_at": "2026-11-11T10:44:29.021992+09:00",
   "requested_as_of": null,
-  "as_of": "2026-11-09",
+  "as_of": "2026-11-10",
   "indicator_order": [
     "dxy",
     "fxi"
@@ -10,82 +10,82 @@
     "dxy": {
       "label": "달러인덱스",
       "source": "Yahoo Finance (DX-Y.NYB)",
-      "as_of": "2026-11-09",
+      "as_of": "2026-11-10",
       "prev_close": {
-        "value": 101.664,
-        "display": "101.66"
+        "value": 102.244,
+        "display": "102.24"
       },
       "sma": {
         "60": {
-          "ma_value": 101.5025,
-          "ma_display": "101.50",
+          "ma_value": 101.5765,
+          "ma_display": "101.58",
           "status_text": "상향 돌파",
-          "display": "101.50 (종가 101.66 → 상향 돌파)",
-          "streak": 39,
+          "display": "101.58 (종가 102.24 → 상향 돌파)",
+          "streak": 40,
           "breakout": true,
-          "streak_display": "39일째",
+          "streak_display": "40일째",
           "copper_friendly": false
         },
         "20": {
-          "ma_value": 101.8739,
-          "ma_display": "101.87",
-          "status_text": "이평선 아래",
-          "display": "101.87 (종가 101.66 → 이평선 아래)",
-          "streak": 0,
-          "breakout": false,
-          "streak_display": "",
-          "copper_friendly": true
+          "ma_value": 101.906,
+          "ma_display": "101.91",
+          "status_text": "상향 돌파",
+          "display": "101.91 (종가 102.24 → 상향 돌파)",
+          "streak": 1,
+          "breakout": true,
+          "streak_display": "1일째",
+          "copper_friendly": false
         },
         "7": {
-          "ma_value": 101.7788,
-          "ma_display": "101.78",
-          "status_text": "이평선 아래",
-          "display": "101.78 (종가 101.66 → 이평선 아래)",
-          "streak": 0,
-          "breakout": false,
-          "streak_display": "",
-          "copper_friendly": true
+          "ma_value": 101.8508,
+          "ma_display": "101.85",
+          "status_text": "상향 돌파",
+          "display": "101.85 (종가 102.24 → 상향 돌파)",
+          "streak": 1,
+          "breakout": true,
+          "streak_display": "1일째",
+          "copper_friendly": false
         }
       }
     },
     "fxi": {
       "label": "FXI (iShares China Large-Cap ETF)",
       "source": "Yahoo Finance (FXI)",
-      "as_of": "2026-11-09",
+      "as_of": "2026-11-10",
       "prev_close": {
-        "value": 34.66,
-        "display": "$34.66"
+        "value": 34.41,
+        "display": "$34.41"
       },
       "sma": {
         "60": {
-          "ma_value": 33.8169,
-          "ma_display": "$33.82",
+          "ma_value": 33.815,
+          "ma_display": "$33.81",
           "status_text": "상향 돌파",
-          "display": "$33.82 (종가 $34.66 → 상향 돌파)",
-          "streak": 4,
+          "display": "$33.81 (종가 $34.41 → 상향 돌파)",
+          "streak": 5,
           "breakout": true,
-          "streak_display": "4일째",
+          "streak_display": "5일째",
           "copper_friendly": true
         },
         "20": {
-          "ma_value": 33.32,
-          "ma_display": "$33.32",
+          "ma_value": 33.425,
+          "ma_display": "$33.42",
           "status_text": "상향 돌파",
-          "display": "$33.32 (종가 $34.66 → 상향 돌파)",
-          "streak": 6,
+          "display": "$33.42 (종가 $34.41 → 상향 돌파)",
+          "streak": 7,
           "breakout": true,
-          "streak_display": "6일째",
+          "streak_display": "7일째",
           "copper_friendly": true
         },
         "7": {
-          "ma_value": 34.466,
-          "ma_display": "$34.47",
-          "status_text": "상향 돌파",
-          "display": "$34.47 (종가 $34.66 → 상향 돌파)",
-          "streak": 9,
-          "breakout": true,
-          "streak_display": "9일째",
-          "copper_friendly": true
+          "ma_value": 34.71,
+          "ma_display": "$34.71",
+          "status_text": "이평선 아래",
+          "display": "$34.71 (종가 $34.41 → 이평선 아래)",
+          "streak": 0,
+          "breakout": false,
+          "streak_display": "",
+          "copper_friendly": false
         }
       }
     }
