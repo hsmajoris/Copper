@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-11-18T12:22:00.623229+09:00",
+  "generated_at": "2026-11-19T11:57:29.172516+09:00",
   "requested_as_of": null,
-  "as_of": "2026-11-17",
+  "as_of": "2026-11-18",
   "indicator_order": [
     "dxy",
     "fxi"
@@ -10,40 +10,40 @@
     "dxy": {
       "label": "달러인덱스",
       "source": "Yahoo Finance (DX-Y.NYB)",
-      "as_of": "2026-11-17",
+      "as_of": "2026-11-18",
       "prev_close": {
-        "value": 103.633,
-        "display": "103.63"
+        "value": 103.868,
+        "display": "103.87"
       },
       "sma": {
         "60": {
-          "ma_value": 101.9765,
-          "ma_display": "101.98",
+          "ma_value": 102.0172,
+          "ma_display": "102.02",
           "status_text": "상향 돌파",
-          "display": "101.98 (종가 103.63 → 상향 돌파)",
-          "streak": 45,
+          "display": "102.02 (종가 103.87 → 상향 돌파)",
+          "streak": 46,
           "breakout": true,
-          "streak_display": "45일째",
+          "streak_display": "46일째",
           "copper_friendly": false
         },
         "20": {
-          "ma_value": 102.3895,
-          "ma_display": "102.39",
+          "ma_value": 102.5099,
+          "ma_display": "102.51",
           "status_text": "상향 돌파",
-          "display": "102.39 (종가 103.63 → 상향 돌파)",
-          "streak": 6,
+          "display": "102.51 (종가 103.87 → 상향 돌파)",
+          "streak": 7,
           "breakout": true,
-          "streak_display": "6일째",
+          "streak_display": "7일째",
           "copper_friendly": false
         },
         "7": {
-          "ma_value": 103.3346,
-          "ma_display": "103.33",
+          "ma_value": 103.4976,
+          "ma_display": "103.50",
           "status_text": "상향 돌파",
-          "display": "103.33 (종가 103.63 → 상향 돌파)",
-          "streak": 6,
+          "display": "103.50 (종가 103.87 → 상향 돌파)",
+          "streak": 7,
           "breakout": true,
-          "streak_display": "6일째",
+          "streak_display": "7일째",
           "copper_friendly": false
         }
       }
@@ -51,37 +51,37 @@
     "fxi": {
       "label": "FXI (iShares China Large-Cap ETF)",
       "source": "Yahoo Finance (FXI)",
-      "as_of": "2026-11-17",
+      "as_of": "2026-11-18",
       "prev_close": {
-        "value": 32.88,
-        "display": "$32.88"
+        "value": 32.39,
+        "display": "$32.39"
       },
       "sma": {
         "60": {
-          "ma_value": 33.7057,
-          "ma_display": "$33.71",
+          "ma_value": 33.6751,
+          "ma_display": "$33.68",
           "status_text": "이평선 아래",
-          "display": "$33.71 (종가 $32.88 → 이평선 아래)",
+          "display": "$33.68 (종가 $32.39 → 이평선 아래)",
           "streak": 0,
           "breakout": false,
           "streak_display": "",
           "copper_friendly": false
         },
         "20": {
-          "ma_value": 33.7714,
-          "ma_display": "$33.77",
+          "ma_value": 33.75,
+          "ma_display": "$33.75",
           "status_text": "이평선 아래",
-          "display": "$33.77 (종가 $32.88 → 이평선 아래)",
+          "display": "$33.75 (종가 $32.39 → 이평선 아래)",
           "streak": 0,
           "breakout": false,
           "streak_display": "",
           "copper_friendly": false
         },
         "7": {
-          "ma_value": 33.416,
-          "ma_display": "$33.42",
+          "ma_value": 33.11,
+          "ma_display": "$33.11",
           "status_text": "이평선 아래",
-          "display": "$33.42 (종가 $32.88 → 이평선 아래)",
+          "display": "$33.11 (종가 $32.39 → 이평선 아래)",
           "streak": 0,
           "breakout": false,
           "streak_display": "",
